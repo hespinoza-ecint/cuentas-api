@@ -17,6 +17,7 @@ import { addDays, compareLocalDates } from '../../domain/shared/local-date';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { HolidayCalendarService } from '../holidays/holiday-calendar.service';
+import { InstallmentsService } from '../installments/installments.service';
 import { FinancialDatePolicy } from '../ledger/financial-date.policy';
 import { UpdateStatementDto } from './dto/card.dto';
 import { CardsRepository } from './repositories/cards.repository';
@@ -46,6 +47,7 @@ export class StatementsService {
     private readonly cardsService: CardsService,
     private readonly holidays: HolidayCalendarService,
     private readonly datePolicy: FinancialDatePolicy,
+    private readonly installmentsService: InstallmentsService,
     private readonly audit: AuditService,
   ) {}
 
@@ -84,8 +86,26 @@ export class StatementsService {
 
     const entries = await this.prisma.cardLedgerEntry.findMany({
       where: { userId, creditCardId: card.id },
-      select: { amount: true, type: true, occurredOn: true },
+      select: { amount: true, type: true, occurredOn: true, sourceType: true },
     });
+
+    // Mensualidades exigibles por corte (lo ya pagado reduce lo exigible).
+    const installments = await this.prisma.installment.findMany({
+      where: {
+        userId,
+        plan: { creditCardId: card.id },
+        status: { not: 'CANCELLED' },
+      },
+      select: { statementCutDate: true, totalAmount: true, paidAmount: true },
+    });
+    const dueByCut = new Map<string, number>();
+    for (const installment of installments) {
+      const outstanding = Math.max(installment.totalAmount - installment.paidAmount, 0);
+      dueByCut.set(
+        installment.statementCutDate,
+        (dueByCut.get(installment.statementCutDate) ?? 0) + outstanding,
+      );
+    }
 
     const config: DueDateConfig = {
       mode: card.dueDateMode as DueDateConfig['mode'],
@@ -94,6 +114,8 @@ export class StatementsService {
       rule: card.dueNonBusinessDayRule as NonBusinessDayRule,
     };
 
+    let previousUnpaid = 0;
+
     for (const cutDate of cuts) {
       const periodStart = statementPeriodStart(card.cutDay, cutDate);
 
@@ -101,7 +123,8 @@ export class StatementsService {
         .filter((entry) => compareLocalDates(entry.occurredOn, cutDate) <= 0)
         .reduce((total, entry) => total + entry.amount, 0);
 
-      const cycleCharges = entries
+      // Cargos regulares del periodo (las compras a meses se cobran por mensualidad).
+      const regularCycleCharges = entries
         .filter(
           (entry) =>
             isInStatementPeriod(
@@ -111,9 +134,15 @@ export class StatementsService {
               card.sameDayCutIncluded,
             ) &&
             CHARGE_TYPES.has(entry.type) &&
-            entry.amount > 0,
+            entry.amount > 0 &&
+            entry.sourceType !== 'InstallmentPlan',
         )
         .reduce((total, entry) => total + entry.amount, 0);
+
+      // RN-17: pago para no generar intereses = cargos del periodo +
+      // mensualidades exigibles + saldo anterior no cubierto.
+      const dueInstallments = dueByCut.get(cutDate) ?? 0;
+      const noInterestPaymentCalc = regularCycleCharges + dueInstallments + previousUnpaid;
 
       const dueDate = dueDateFor(cutDate, config, holidays);
       const minimumPaymentEstimated = Math.max(
@@ -125,8 +154,8 @@ export class StatementsService {
         periodStart,
         dueDate,
         statementBalance,
-        cycleCharges,
-        noInterestPaymentCalc: statementBalance,
+        cycleCharges: regularCycleCharges,
+        noInterestPaymentCalc,
         minimumPaymentEstimated,
       };
 
@@ -144,6 +173,17 @@ export class StatementsService {
         statement = await this.cards.updateStatement(statement.id, base);
       }
 
+      // Las mensualidades del corte quedan facturadas y ligadas al estado.
+      await this.prisma.installment.updateMany({
+        where: {
+          userId,
+          plan: { creditCardId: card.id },
+          statementCutDate: cutDate,
+          status: 'SCHEDULED',
+        },
+        data: { statementId: statement.id, status: 'BILLED' },
+      });
+
       const paid = await this.cards.sumAllocations(statement.id);
       const amountToAvoidInterest =
         statement.noInterestPaymentReported ?? statement.noInterestPaymentCalc;
@@ -155,6 +195,8 @@ export class StatementsService {
           status,
         });
       }
+
+      previousUnpaid = Math.max(amountToAvoidInterest - paid, 0);
     }
 
     return this.cards.listStatements(userId, card.id);
@@ -283,7 +325,7 @@ export class StatementsService {
     return finalStatement;
   }
 
-  /** Aplica un pago a los cortes con saldo exigible (RN-23). */
+  /** Aplica un pago a los cortes exigibles (RN-23), abonando mensualidades. */
   async applyPaymentAllocations(
     userId: string,
     cardId: string,
@@ -298,6 +340,7 @@ export class StatementsService {
     });
 
     const allocations: PaymentAllocation[] = [];
+    const touchedPlans = new Set<string>();
     let remaining = amount;
     let firstStatementId: string | null = null;
 
@@ -314,17 +357,72 @@ export class StatementsService {
       }
 
       const applied = Math.min(remaining, outstanding);
-      allocations.push(
-        await tx.paymentAllocation.create({
+      let leftover = applied;
+
+      // 1) Mensualidades exigibles del corte, de la mas antigua a la mas nueva.
+      const installments = await tx.installment.findMany({
+        where: {
+          userId,
+          statementId: statement.id,
+          status: { in: ['BILLED', 'PARTIALLY_PAID'] },
+        },
+        orderBy: { number: 'asc' },
+      });
+
+      for (const installment of installments) {
+        if (leftover <= 0) {
+          break;
+        }
+
+        const installmentOutstanding = installment.totalAmount - installment.paidAmount;
+        if (installmentOutstanding <= 0) {
+          continue;
+        }
+
+        const installmentApplied = Math.min(leftover, installmentOutstanding);
+        const paidAmount = installment.paidAmount + installmentApplied;
+        const fullyPaid = paidAmount >= installment.totalAmount;
+
+        await tx.installment.update({
+          where: { id: installment.id },
           data: {
-            userId,
-            cardPaymentId: paymentId,
-            statementId: statement.id,
-            targetType: 'STATEMENT',
-            amount: applied,
+            paidAmount,
+            status: fullyPaid ? 'PAID' : 'PARTIALLY_PAID',
+            paidAt: fullyPaid ? new Date() : installment.paidAt,
           },
-        }),
-      );
+        });
+
+        allocations.push(
+          await tx.paymentAllocation.create({
+            data: {
+              userId,
+              cardPaymentId: paymentId,
+              statementId: statement.id,
+              installmentId: installment.id,
+              targetType: 'INSTALLMENT',
+              amount: installmentApplied,
+            },
+          }),
+        );
+
+        touchedPlans.add(installment.planId);
+        leftover -= installmentApplied;
+      }
+
+      // 2) El resto del monto aplicado cubre cargos regulares del corte.
+      if (leftover > 0) {
+        allocations.push(
+          await tx.paymentAllocation.create({
+            data: {
+              userId,
+              cardPaymentId: paymentId,
+              statementId: statement.id,
+              targetType: 'STATEMENT',
+              amount: leftover,
+            },
+          }),
+        );
+      }
 
       const paidAmount = statement.paidAmount + applied;
       await tx.cardStatement.update({
@@ -354,6 +452,10 @@ export class StatementsService {
           },
         }),
       );
+    }
+
+    for (const planId of touchedPlans) {
+      await this.installmentsService.refreshPlanState(planId, tx);
     }
 
     return { allocations, firstStatementId };

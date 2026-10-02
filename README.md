@@ -13,7 +13,7 @@ Backend del asistente financiero **Cuentas**: ayuda a decidir qué tarjeta de cr
 | 2 | Usuarios y autenticación | ✅ Implementada |
 | 3 | Saldo, ingresos y movimientos | ✅ Implementada |
 | 4 | Tarjetas de crédito | ✅ Implementada |
-| 5 | Compras y mensualidades | ⏳ Pendiente |
+| 5 | Compras y mensualidades | ✅ Implementada |
 | 6 | Motor de recomendaciones | ⏳ Pendiente |
 | 7 | Pruebas y preparación para producción | ⏳ Pendiente |
 
@@ -152,6 +152,11 @@ cuentas-api/
 | PATCH | `/api/v1/cards/:id/statements/:statementId` | Montos reportados del corte |
 | GET/POST | `/api/v1/card-payments` | Pagos de tarjeta |
 | POST | `/api/v1/card-payments/:id/reverse` | Reverso de un pago |
+| GET/POST | `/api/v1/purchases` | Compras regulares, MSI y diferidas |
+| GET | `/api/v1/purchases/:id` | Detalle con plan de mensualidades |
+| POST | `/api/v1/purchases/:id/cancel` | Cancelación o devolución sin pagos |
+| GET | `/api/v1/installment-plans/:id` | Plan de mensualidades |
+| POST | `/api/v1/installment-plans/:id/prepay` | Anticipo o liquidación del plan |
 | GET | `/api/docs` | Documentación interactiva (Swagger UI) |
 | GET | `/api/docs-json` | Especificación OpenAPI |
 
@@ -171,3 +176,4 @@ cuentas-api/
 - [Fase 2 — Usuarios y autenticación](docs/fase-02-auth.md)
 - [Fase 3 — Saldo, ingresos y movimientos](docs/fase-03-cashflow.md)
 - [Fase 4 — Tarjetas de crédito](docs/fase-04-cards.md)
+- [Fase 5 — Compras y mensualidades](docs/fase-05-purchases.md)

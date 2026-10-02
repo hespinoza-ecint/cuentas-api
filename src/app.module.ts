@@ -19,7 +19,9 @@ import { CategoriesModule } from './modules/categories/categories.module';
 import { ExpensesModule } from './modules/expenses/expenses.module';
 import { HealthModule } from './modules/health/health.module';
 import { IncomeModule } from './modules/income/income.module';
+import { InstallmentsModule } from './modules/installments/installments.module';
 import { LedgerModule } from './modules/ledger/ledger.module';
+import { PurchasesModule } from './modules/purchases/purchases.module';
 import { UsersModule } from './modules/users/users.module';
 
 function buildLoggerOptions(config: AppConfigService): Params {
@@ -84,6 +86,7 @@ function buildLoggerOptions(config: AppConfigService): Params {
     ClockModule,
     LedgerModule,
     CardLedgerModule,
+    InstallmentsModule,
     AuthModule,
     UsersModule,
     CategoriesModule,
@@ -93,6 +96,7 @@ function buildLoggerOptions(config: AppConfigService): Params {
     IncomeModule,
     CardsModule,
     CardPaymentsModule,
+    PurchasesModule,
     HealthModule,
   ],
   providers: [

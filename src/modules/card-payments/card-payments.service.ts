@@ -12,6 +12,7 @@ import { AuditService } from '../audit/audit.service';
 import { CardLedgerService } from '../card-ledger/card-ledger.service';
 import { CardsService } from '../cards/cards.service';
 import { StatementsService } from '../cards/statements.service';
+import { InstallmentsService } from '../installments/installments.service';
 import { LedgerService } from '../ledger/ledger.service';
 import { FinancialDatePolicy } from '../ledger/financial-date.policy';
 import {
@@ -36,6 +37,7 @@ export class CardPaymentsService {
     private readonly payments: CardPaymentsRepository,
     private readonly cardsService: CardsService,
     private readonly statements: StatementsService,
+    private readonly installmentsService: InstallmentsService,
     private readonly ledger: LedgerService,
     private readonly cardLedger: CardLedgerService,
     private readonly datePolicy: FinancialDatePolicy,
@@ -223,6 +225,23 @@ export class CardPaymentsService {
       await this.ledger.reverseMovement(userId, payment.cashMovementId, dto.reason, userId, tx);
 
       for (const allocation of payment.allocations) {
+        if (allocation.installmentId) {
+          const installment = await tx.installment.findUnique({
+            where: { id: allocation.installmentId },
+          });
+          if (installment) {
+            const paidAmount = Math.max(installment.paidAmount - allocation.amount, 0);
+            const status =
+              paidAmount <= 0 ? (installment.statementId ? 'BILLED' : 'SCHEDULED') : 'PARTIALLY_PAID';
+            await tx.installment.update({
+              where: { id: installment.id },
+              data: { paidAmount, status, paidAt: null },
+            });
+            await this.installmentsService.refreshPlanState(installment.planId, tx);
+          }
+          continue;
+        }
+
         if (!allocation.statementId) {
           continue;
         }

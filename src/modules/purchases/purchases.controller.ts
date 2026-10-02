@@ -1,0 +1,60 @@
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Query,
+  Req,
+} from '@nestjs/common';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import type { FastifyRequest } from 'fastify';
+import { AuthenticatedUser } from '../../common/auth/authenticated-user';
+import { CurrentUser } from '../../common/auth/current-user.decorator';
+import { RequireVerifiedEmail } from '../../common/auth/require-verified-email.decorator';
+import { requestMeta } from '../../common/http/request-meta';
+import {
+  CancelPurchaseDto,
+  CreatePurchaseDto,
+  ListPurchasesQueryDto,
+} from './dto/purchase.dto';
+import { PurchasesService } from './purchases.service';
+
+@ApiTags('purchases')
+@ApiBearerAuth('access-token')
+@Controller('purchases')
+export class PurchasesController {
+  constructor(private readonly purchasesService: PurchasesService) {}
+
+  @Get()
+  list(@CurrentUser() user: AuthenticatedUser, @Query() query: ListPurchasesQueryDto) {
+    return this.purchasesService.list(user.id, query);
+  }
+
+  @Post()
+  @RequireVerifiedEmail()
+  create(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: CreatePurchaseDto,
+    @Req() request: FastifyRequest,
+  ) {
+    return this.purchasesService.create(user.id, dto, requestMeta(request));
+  }
+
+  @Get(':id')
+  get(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseUUIDPipe) id: string) {
+    return this.purchasesService.get(user.id, id);
+  }
+
+  @Post(':id/cancel')
+  @RequireVerifiedEmail()
+  cancel(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CancelPurchaseDto,
+    @Req() request: FastifyRequest,
+  ) {
+    return this.purchasesService.cancel(user.id, id, dto, requestMeta(request));
+  }
+}

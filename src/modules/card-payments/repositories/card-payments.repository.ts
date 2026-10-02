@@ -55,10 +55,10 @@ export class CardPaymentsRepository {
     });
   }
 
-  findRaw(userId: string, id: string): Promise<(CardPayment & { allocations: { statementId: string | null; amount: number }[] }) | null> {
+  findRaw(userId: string, id: string): Promise<(CardPayment & { allocations: { statementId: string | null; installmentId: string | null; amount: number }[] }) | null> {
     return this.prisma.cardPayment.findFirst({
       where: { id, userId },
-      include: { allocations: { select: { statementId: true, amount: true } } },
+      include: { allocations: { select: { statementId: true, installmentId: true, amount: true } } },
     });
   }
 }

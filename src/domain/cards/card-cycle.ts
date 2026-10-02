@@ -153,7 +153,6 @@ export function isInStatementPeriod(
 }
 
 export type StatementStatus = 'PAID' | 'OVERDUE' | 'PARTIALLY_PAID' | 'CLOSED';
-
 /** Estado de un corte segun lo pagado contra el "pago para no generar intereses". */
 export function statementStatusFor(
   amountToAvoidInterest: number,
@@ -168,4 +167,41 @@ export function statementStatusFor(
     return 'OVERDUE';
   }
   return paidAmount > 0 ? 'PARTIALLY_PAID' : 'CLOSED';
+}
+
+/**
+ * RN-19: corte en el que se cobra la primera mensualidad, es decir, el
+ * primer corte que incluye la compra segun `sameDayCutIncluded`.
+ */
+export function cutDateForPurchase(
+  cutDay: number,
+  purchaseDate: string,
+  sameDayCutIncluded: boolean,
+): string {
+  return nextCutDate(
+    cutDay,
+    sameDayCutIncluded ? addDays(purchaseDate, -1) : purchaseDate,
+  );
+}
+
+/** Cortes mensuales consecutivos a partir de `firstCut`. */
+export function cutDatesFrom(cutDay: number, firstCut: string, count: number): string[] {
+  const cuts: string[] = [];
+  let cursor = firstCut;
+
+  for (let index = 0; index < count; index += 1) {
+    cuts.push(cursor);
+    const parts = parseLocalDate(cursor);
+    if (!parts) {
+      break;
+    }
+    const nextMonth = addMonths(buildLocalDate(parts.year, parts.month, 1), 1);
+    const nextParts = parseLocalDate(nextMonth);
+    if (!nextParts) {
+      break;
+    }
+    cursor = cutDateForMonth(cutDay, nextParts.year, nextParts.month);
+  }
+
+  return cuts;
 }

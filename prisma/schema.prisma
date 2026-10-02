@@ -54,6 +54,9 @@ model User {
   cardStatements     CardStatement[]
   cardPayments       CardPayment[]
   paymentAllocations PaymentAllocation[]
+  purchases          Purchase[]
+  installmentPlans   InstallmentPlan[]
+  installments       Installment[]
   auditLogs          AuditLog[]          @relation("AuditSubject")
   auditLogsAsActor   AuditLog[]          @relation("AuditActor")
   idempotencyRecords IdempotencyRecord[]
@@ -100,6 +103,7 @@ model Category {
   incomeSources     IncomeSource[]
   recurringExpenses RecurringExpense[]
   expenses          Expense[]
+  purchases         Purchase[]
 
   @@index([userId, parentId, name])
   @@index([kind])
@@ -364,6 +368,7 @@ model RecurringExpense {
   cashAccount CashAccount @relation(fields: [cashAccountId], references: [id], onDelete: Restrict)
   category    Category?   @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   expenses    Expense[]
+  purchases   Purchase[]
 
   @@index([userId, isActive])
 }
@@ -429,6 +434,8 @@ model CreditCard {
   entries    CardLedgerEntry[]
   statements CardStatement[]
   payments   CardPayment[]
+  purchases  Purchase[]
+  plans      InstallmentPlan[]
 
   @@unique([userId, alias])
   @@index([userId, status])
@@ -485,6 +492,7 @@ model CardStatement {
   entries     CardLedgerEntry[]
   payments    CardPayment[]
   allocations PaymentAllocation[]
+  installments Installment[]
 
   @@unique([creditCardId, cutDate])
   @@index([userId, dueDate])
@@ -498,11 +506,12 @@ model CardPayment {
   creditCardId      String
   cashAccountId     String
   statementId       String?
+  installmentPlanId String?
   cashMovementId    String   @unique
   cardLedgerEntryId String   @unique
   amount            Int
   paymentDate       String // "YYYY-MM-DD"
-  type              String   @default("STATEMENT") // STATEMENT | PARTIAL
+  type              String   @default("STATEMENT") // STATEMENT | PARTIAL | INSTALLMENT_PREPAYMENT | PLAN_PAYOFF
   status            String   @default("APPLIED") // APPLIED | REVERSED
   notes             String?
   createdAt         DateTime @default(now())
@@ -512,6 +521,7 @@ model CardPayment {
   creditCard      CreditCard          @relation(fields: [creditCardId], references: [id], onDelete: Restrict)
   cashAccount     CashAccount         @relation(fields: [cashAccountId], references: [id], onDelete: Restrict)
   statement       CardStatement?      @relation(fields: [statementId], references: [id], onDelete: SetNull)
+  installmentPlan InstallmentPlan?    @relation(fields: [installmentPlanId], references: [id], onDelete: SetNull)
   cashMovement    CashMovement        @relation(fields: [cashMovementId], references: [id], onDelete: Restrict)
   cardLedgerEntry CardLedgerEntry     @relation(fields: [cardLedgerEntryId], references: [id], onDelete: Restrict)
   allocations     PaymentAllocation[]
@@ -534,7 +544,103 @@ model PaymentAllocation {
   user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   cardPayment CardPayment    @relation(fields: [cardPaymentId], references: [id], onDelete: Cascade)
   statement   CardStatement? @relation(fields: [statementId], references: [id], onDelete: SetNull)
+  installment Installment?   @relation(fields: [installmentId], references: [id], onDelete: SetNull)
 
   @@index([cardPaymentId])
   @@index([statementId])
+  @@index([installmentId])
+}
+
+/// Compra con tarjeta: regular, meses sin intereses o diferida con intereses (RN-25).
+model Purchase {
+  id                 String   @id @default(uuid())
+  userId             String
+  creditCardId       String
+  categoryId         String?
+  recurringExpenseId String?
+  /// Reservado para la Fase 6 (motor de recomendaciones).
+  recommendationId   String?
+  description        String
+  amount             Int
+  purchaseDate       String // "YYYY-MM-DD"
+  occurrenceDate     String?
+  type               String // REGULAR | MSI | DEFERRED_INTEREST
+  status             String   @default("ACTIVE") // ACTIVE | PAID | CANCELLED | REFUNDED
+  notes              String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  creditCard       CreditCard        @relation(fields: [creditCardId], references: [id], onDelete: Restrict)
+  category         Category?         @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  recurringExpense RecurringExpense? @relation(fields: [recurringExpenseId], references: [id], onDelete: SetNull)
+  installmentPlan  InstallmentPlan?
+
+  @@index([userId, creditCardId, purchaseDate])
+  @@index([userId, status])
+}
+
+/// Plan de mensualidades (MSI o diferida). 1:1 con la compra.
+model InstallmentPlan {
+  id                      String   @id @default(uuid())
+  userId                  String
+  creditCardId            String
+  purchaseId              String   @unique
+  type                    String // MSI | DEFERRED_INTEREST
+  principal               Int
+  months                  Int
+  annualRateBps           Int      @default(0)
+  ivaRateBps              Int      @default(1600)
+  commissionAmount        Int      @default(0)
+  commissionMode          String   @default("NONE") // NONE | UPFRONT | PRORATED
+  amortizationMethod      String   @default("FRENCH") // EQUAL | FRENCH
+  firstStatementDate      String // "YYYY-MM-DD"
+  estimatedMonthlyPayment Int
+  totalInterest           Int      @default(0)
+  totalIva                Int      @default(0)
+  /// Cache del principal pendiente; se actualiza con cada pago.
+  outstandingPrincipal    Int
+  prepaymentMode          String   @default("REDUCE_TERM") // REDUCE_TERM | REDUCE_PAYMENT
+  status                  String   @default("ACTIVE") // ACTIVE | PAID_OFF | CANCELLED
+  version                 Int      @default(0)
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  creditCard   CreditCard    @relation(fields: [creditCardId], references: [id], onDelete: Restrict)
+  purchase     Purchase      @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  installments Installment[]
+  payments     CardPayment[]
+
+  @@index([userId, status])
+}
+
+/// Mensualidad de un plan (RN-19: la primera es del corte de la compra).
+model Installment {
+  id               String    @id @default(uuid())
+  userId           String
+  planId           String
+  statementId      String?
+  number           Int
+  statementCutDate String // "YYYY-MM-DD"
+  dueDate          String // "YYYY-MM-DD"
+  principal        Int
+  interest         Int       @default(0)
+  iva              Int       @default(0)
+  fee              Int       @default(0)
+  totalAmount      Int
+  paidAmount       Int       @default(0)
+  status           String    @default("SCHEDULED") // SCHEDULED | BILLED | PARTIALLY_PAID | PAID | CANCELLED
+  paidAt           DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan        InstallmentPlan     @relation(fields: [planId], references: [id], onDelete: Cascade)
+  statement   CardStatement?      @relation(fields: [statementId], references: [id], onDelete: SetNull)
+  allocations PaymentAllocation[]
+
+  @@unique([planId, number])
+  @@index([userId, dueDate])
+  @@index([userId, status])
 }
