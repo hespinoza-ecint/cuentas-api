@@ -3,9 +3,14 @@ import { testDatabasePath, toDatabaseUrl } from './test-db';
 /**
  * Configuracion de entorno para las pruebas. Se ejecuta antes de importar
  * cualquier modulo de la aplicacion, por lo que `process.env` gana sobre `.env`.
+ *
+ * Cada worker de Jest usa una base SQLite distinta (cuentas.test.N.db) para
+ * que las suites en paralelo no compitan por el mismo archivo.
  */
+const workerId = process.env.JEST_WORKER_ID ?? '1';
+
 process.env.NODE_ENV = 'test';
-process.env.DATABASE_URL = toDatabaseUrl(testDatabasePath());
+process.env.DATABASE_URL = toDatabaseUrl(testDatabasePath(workerId));
 process.env.LOG_LEVEL = 'silent';
 process.env.DOCS_ENABLED = 'true';
 process.env.APP_VERSION = '0.0.0-test';

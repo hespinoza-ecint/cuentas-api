@@ -1,7 +1,7 @@
 import { execSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { testDatabasePath, toDatabaseUrl } from './test-db';
+import { TEST_DB_POOL_SIZE, testDatabasePath, toDatabaseUrl } from './test-db';
 
 function run(command: string, databaseUrl: string): void {
   const projectRoot = path.resolve(__dirname, '..', '..');
@@ -22,20 +22,24 @@ function run(command: string, databaseUrl: string): void {
 }
 
 /**
- * Prepara una base de datos de prueba limpia: aplica migraciones y ejecuta el seed.
- * Se ejecuta una sola vez por corrida de Jest.
+ * Prepara el pool de bases de prueba (una por worker de Jest): aplica
+ * migraciones y ejecuta el seed dos veces para validar su idempotencia.
  */
 export default async function globalSetup(): Promise<void> {
-  const dbPath = testDatabasePath();
-  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+  const directory = path.dirname(testDatabasePath('1'));
+  fs.mkdirSync(directory, { recursive: true });
 
-  for (const suffix of ['', '-wal', '-shm', '-journal']) {
-    fs.rmSync(`${dbPath}${suffix}`, { force: true });
+  for (let index = 1; index <= TEST_DB_POOL_SIZE; index += 1) {
+    const dbPath = testDatabasePath(String(index));
+
+    for (const suffix of ['', '-wal', '-shm', '-journal']) {
+      fs.rmSync(`${dbPath}${suffix}`, { force: true });
+    }
+
+    const databaseUrl = toDatabaseUrl(dbPath);
+    run('npx prisma migrate deploy', databaseUrl);
+    // Dos veces a proposito: valida que el seed sea idempotente.
+    run('npx prisma db seed', databaseUrl);
+    run('npx prisma db seed', databaseUrl);
   }
-
-  const databaseUrl = toDatabaseUrl(dbPath);
-  run('npx prisma migrate deploy', databaseUrl);
-  // Se ejecuta dos veces a proposito: valida que el seed sea idempotente.
-  run('npx prisma db seed', databaseUrl);
-  run('npx prisma db seed', databaseUrl);
 }

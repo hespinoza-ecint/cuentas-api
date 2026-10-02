@@ -4,12 +4,19 @@ import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule, Params } from 'nestjs-pino';
 import { AppConfigModule } from './config/app-config.module';
 import { AppConfigService } from './config/app-config.service';
+import { ClockModule } from './infrastructure/clock/clock.module';
 import { PrismaModule } from './infrastructure/prisma/prisma.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
 import { RolesGuard } from './modules/auth/guards/roles.guard';
 import { VerifiedEmailGuard } from './modules/auth/guards/verified-email.guard';
+import { CashAccountsModule } from './modules/cash-accounts/cash-accounts.module';
+import { CashMovementsModule } from './modules/cash-movements/cash-movements.module';
+import { CategoriesModule } from './modules/categories/categories.module';
+import { ExpensesModule } from './modules/expenses/expenses.module';
 import { HealthModule } from './modules/health/health.module';
+import { IncomeModule } from './modules/income/income.module';
+import { LedgerModule } from './modules/ledger/ledger.module';
 import { UsersModule } from './modules/users/users.module';
 
 function buildLoggerOptions(config: AppConfigService): Params {
@@ -71,8 +78,15 @@ function buildLoggerOptions(config: AppConfigService): Params {
       }),
     }),
     PrismaModule,
+    ClockModule,
+    LedgerModule,
     AuthModule,
     UsersModule,
+    CategoriesModule,
+    CashAccountsModule,
+    CashMovementsModule,
+    ExpensesModule,
+    IncomeModule,
     HealthModule,
   ],
   providers: [

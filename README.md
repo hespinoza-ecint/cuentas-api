@@ -11,7 +11,7 @@ Backend del asistente financiero **Cuentas**: ayuda a decidir qué tarjeta de cr
 | 0 | Análisis, reglas de negocio, arquitectura y modelo de datos | ✅ Cerrada |
 | 1 | Base del backend (proyecto, SQLite + Prisma, configuración, errores, logs, Swagger, seed) | ✅ Implementada |
 | 2 | Usuarios y autenticación | ✅ Implementada |
-| 3 | Saldo, ingresos y movimientos | ⏳ Pendiente |
+| 3 | Saldo, ingresos y movimientos | ✅ Implementada |
 | 4 | Tarjetas de crédito | ⏳ Pendiente |
 | 5 | Compras y mensualidades | ⏳ Pendiente |
 | 6 | Motor de recomendaciones | ⏳ Pendiente |
@@ -125,6 +125,24 @@ cuentas-api/
 | POST | `/api/v1/users/me/delete` | Solicita la eliminación (30 días de gracia) |
 | POST | `/api/v1/users/me/cancel-deletion` | Cancela la eliminación |
 | GET | `/api/v1/users/me/export` | Exporta los datos en JSON |
+| GET/POST | `/api/v1/cash-accounts` | Cuentas de efectivo y saldo inicial |
+| GET/PATCH/DELETE | `/api/v1/cash-accounts/:id` | Detalle, edición y borrado |
+| POST | `/api/v1/cash-accounts/transfer` | Transferencia entre cuentas |
+| POST | `/api/v1/cash-accounts/:id/recalculate` | Recalcula el saldo desde el libro |
+| GET | `/api/v1/cash-movements` | Libro de movimientos con filtros |
+| POST | `/api/v1/cash-movements/adjustments` | Ajuste manual con motivo |
+| POST | `/api/v1/cash-movements/:id/reverse` | Reverso de un movimiento |
+| GET | `/api/v1/categories` | Categorías globales y propias |
+| GET/POST | `/api/v1/expenses` | Gastos |
+| POST | `/api/v1/expenses/:id/reverse` | Reverso de un gasto |
+| GET/POST | `/api/v1/recurring-expenses` | Gastos recurrentes |
+| GET | `/api/v1/recurring-expenses/upcoming` | Próximas ocurrencias |
+| POST | `/api/v1/recurring-expenses/:id/confirm` | Confirma una ocurrencia |
+| GET/POST | `/api/v1/income/sources` | Fuentes de ingreso y calendarios |
+| GET | `/api/v1/income/upcoming` | Próximos ingresos estimados (RN-08 a RN-11) |
+| GET | `/api/v1/income/transactions` | Historial de ingresos confirmados/omitidos |
+| POST | `/api/v1/income/transactions/confirm` | Confirma un ingreso real |
+| POST | `/api/v1/income/transactions/skip` | Omite una fecha estimada |
 | GET | `/api/docs` | Documentación interactiva (Swagger UI) |
 | GET | `/api/docs-json` | Especificación OpenAPI |
 
@@ -142,3 +160,4 @@ cuentas-api/
 
 - [Fase 1 — Base del backend](docs/fase-01-base.md)
 - [Fase 2 — Usuarios y autenticación](docs/fase-02-auth.md)
+- [Fase 3 — Saldo, ingresos y movimientos](docs/fase-03-cashflow.md)

@@ -97,3 +97,32 @@ export async function createVerifiedUser(
 export function authHeader(accessToken: string): [string, string] {
   return ['Authorization', `Bearer ${accessToken}`];
 }
+
+export interface CashAccountFixture {
+  id: string;
+  name: string;
+  currentBalance: number;
+  isDefault: boolean;
+}
+
+export async function createCashAccount(
+  app: NestFastifyApplication,
+  accessToken: string,
+  overrides: {
+    name?: string;
+    openingBalance?: number;
+    type?: string;
+    isSpendable?: boolean;
+  } = {},
+): Promise<CashAccountFixture> {
+  const response = await request(app.getHttpServer())
+    .post('/api/v1/cash-accounts')
+    .set('Authorization', `Bearer ${accessToken}`)
+    .send({
+      name: overrides.name ?? `Cuenta ${randomUUID().slice(0, 8)}`,
+      ...overrides,
+    })
+    .expect(201);
+
+  return response.body as CashAccountFixture;
+}

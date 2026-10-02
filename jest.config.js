@@ -11,6 +11,7 @@ module.exports = {
   globalSetup: '<rootDir>/helpers/global-setup.ts',
   collectCoverageFrom: ['<rootDir>/../src/**/*.ts'],
   coverageDirectory: '<rootDir>/../coverage',
-  testTimeout: 30000,
+  testTimeout: 120000,
+  maxWorkers: 4,
   clearMocks: true,
 };

@@ -42,6 +42,13 @@ model User {
   categories         Category[]
   sessions           Session[]
   verificationTokens VerificationToken[]
+  cashAccounts       CashAccount[]
+  cashMovements      CashMovement[]
+  incomeSources      IncomeSource[]
+  incomeSchedules    IncomeSchedule[]
+  incomeTransactions IncomeTransaction[]
+  recurringExpenses  RecurringExpense[]
+  expenses           Expense[]
   auditLogs          AuditLog[]          @relation("AuditSubject")
   auditLogsAsActor   AuditLog[]          @relation("AuditActor")
   idempotencyRecords IdempotencyRecord[]
@@ -84,6 +91,10 @@ model Category {
   user     User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
   parent   Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
   children Category[] @relation("CategoryHierarchy")
+
+  incomeSources     IncomeSource[]
+  recurringExpenses RecurringExpense[]
+  expenses          Expense[]
 
   @@index([userId, parentId, name])
   @@index([kind])
@@ -184,4 +195,195 @@ model VerificationToken {
 
   @@index([userId, type])
   @@index([expiresAt])
+}
+
+/// Cuentas de efectivo del usuario (efectivo, debito, ahorro). El saldo es cache del libro.
+/// Regla RN-04: solo las cuentas isSpendable cuentan para el motor de recomendaciones.
+/// Regla RN-05: el saldo jamas se modifica directamente; todo cambio es un CashMovement.
+model CashAccount {
+  id               String    @id @default(uuid())
+  userId           String
+  name             String
+  type             String    @default("CASH") // CASH | DEBIT | SAVINGS | OTHER
+  isSpendable      Boolean   @default(true)
+  isDefault        Boolean   @default(false)
+  currency         String    @default("MXN")
+  /// Cache del libro de movimientos, en centavos.
+  currentBalance   Int       @default(0)
+  balanceVersion   Int       @default(0)
+  status           String    @default("ACTIVE") // ACTIVE | INACTIVE
+  lastReconciledAt DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  deletedAt        DateTime?
+
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  movements  CashMovement[]
+  income     IncomeSource[]
+  expenses   Expense[]
+  recurrences RecurringExpense[]
+
+  @@unique([userId, name])
+  @@index([userId, deletedAt])
+}
+
+/// Libro de movimientos de efectivo: solo insercion. Es la fuente de verdad del saldo.
+model CashMovement {
+  id                 String   @id @default(uuid())
+  userId             String
+  cashAccountId      String
+  /// Un movimiento solo puede revertirse una vez.
+  reversesMovementId String?  @unique
+  type               String // OPENING_BALANCE | INCOME | EXPENSE | CARD_PAYMENT | ADJUSTMENT | TRANSFER_IN | TRANSFER_OUT | REVERSAL
+  /// Monto con signo en centavos (positivo = entra dinero), distinto de cero.
+  amount             Int
+  occurredOn         String // "YYYY-MM-DD"
+  description        String
+  reason             String?
+  sourceType         String? // Expense | IncomeTransaction | Transfer | ...
+  sourceId           String?
+  createdById        String
+  createdAt          DateTime @default(now())
+
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cashAccount CashAccount   @relation(fields: [cashAccountId], references: [id], onDelete: Restrict)
+  reverses    CashMovement? @relation("MovementReversal", fields: [reversesMovementId], references: [id], onDelete: Restrict)
+  reversedBy  CashMovement? @relation("MovementReversal")
+  expense           Expense?
+  incomeTransaction IncomeTransaction?
+
+  @@index([userId, cashAccountId, occurredOn])
+  @@index([userId, createdAt])
+  @@index([sourceType, sourceId])
+}
+
+/// Fuente de ingreso del usuario (sueldo, freelance, renta...).
+model IncomeSource {
+  id              String    @id @default(uuid())
+  userId          String
+  cashAccountId   String
+  categoryId      String?
+  name            String
+  payer           String?
+  amountType      String    @default("FIXED") // FIXED | VARIABLE
+  estimatedAmount Int
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime?
+
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cashAccount  CashAccount         @relation(fields: [cashAccountId], references: [id], onDelete: Restrict)
+  category     Category?           @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  schedules    IncomeSchedule[]
+  transactions IncomeTransaction[]
+
+  @@index([userId, isActive])
+}
+
+/// Calendario de pagos de una fuente de ingreso (regla RN-08: quincena 15 y ultimo).
+model IncomeSchedule {
+  id                 String   @id @default(uuid())
+  userId             String
+  incomeSourceId     String
+  frequency          String // WEEKLY | BIWEEKLY | MONTHLY | CUSTOM | ONE_TIME
+  /// Configuracion JSON validada con Zod en la aplicacion.
+  config             String
+  /// Regla RN-09: PREVIOUS (default) | NEXT | NONE.
+  nonBusinessDayRule String   @default("PREVIOUS")
+  useHolidays        Boolean  @default(true)
+  amountOverride     Int?
+  startDate          String // "YYYY-MM-DD"
+  endDate            String?
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  incomeSource IncomeSource        @relation(fields: [incomeSourceId], references: [id], onDelete: Cascade)
+  transactions IncomeTransaction[]
+
+  @@index([userId, isActive])
+}
+
+/// Confirmacion, omision o reprogramacion de una fecha estimada de ingreso.
+model IncomeTransaction {
+  id               String   @id @default(uuid())
+  userId           String
+  incomeSourceId   String
+  incomeScheduleId String?
+  cashMovementId   String?  @unique
+  expectedDate     String?
+  expectedAmount   Int?
+  actualDate       String?
+  actualAmount     Int?
+  status           String // CONFIRMED | SKIPPED | RESCHEDULED
+  notes            String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  incomeSource   IncomeSource    @relation(fields: [incomeSourceId], references: [id], onDelete: Cascade)
+  incomeSchedule IncomeSchedule? @relation(fields: [incomeScheduleId], references: [id], onDelete: SetNull)
+  cashMovement   CashMovement?   @relation(fields: [cashMovementId], references: [id], onDelete: SetNull)
+
+  @@unique([incomeScheduleId, expectedDate])
+  @@index([userId, status])
+  @@index([userId, actualDate])
+}
+
+/// Gasto recurrente programado (renta, servicios, suscripciones).
+model RecurringExpense {
+  id                 String    @id @default(uuid())
+  userId             String
+  categoryId         String?
+  cashAccountId      String
+  name               String
+  amount             Int
+  amountType         String    @default("FIXED") // FIXED | VARIABLE
+  paymentMethod      String    @default("CASH_ACCOUNT") // CASH_ACCOUNT | CREDIT_CARD
+  frequency          String
+  config             String
+  nonBusinessDayRule String    @default("NONE")
+  useHolidays        Boolean   @default(true)
+  startDate          String
+  endDate            String?
+  isActive           Boolean   @default(true)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  deletedAt          DateTime?
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cashAccount CashAccount @relation(fields: [cashAccountId], references: [id], onDelete: Restrict)
+  category    Category?   @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  expenses    Expense[]
+
+  @@index([userId, isActive])
+}
+
+/// Gasto pagado con una cuenta de efectivo (RN-25). Siempre ligado a un movimiento.
+model Expense {
+  id                 String   @id @default(uuid())
+  userId             String
+  cashAccountId      String
+  categoryId         String?
+  recurringExpenseId String?
+  cashMovementId     String   @unique
+  description        String
+  amount             Int
+  expenseDate        String // "YYYY-MM-DD"
+  occurrenceDate     String?
+  status             String   @default("PAID") // PAID | REVERSED
+  notes              String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cashAccount      CashAccount      @relation(fields: [cashAccountId], references: [id], onDelete: Restrict)
+  category         Category?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  recurringExpense RecurringExpense? @relation(fields: [recurringExpenseId], references: [id], onDelete: SetNull)
+  cashMovement     CashMovement     @relation(fields: [cashMovementId], references: [id], onDelete: Restrict)
+
+  @@unique([recurringExpenseId, occurrenceDate])
+  @@index([userId, expenseDate])
 }
