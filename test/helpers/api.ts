@@ -126,3 +126,48 @@ export async function createCashAccount(
 
   return response.body as CashAccountFixture;
 }
+
+export interface CreditCardFixture {
+  id: string;
+  alias: string;
+  currentBalance: number;
+  availableCredit: number;
+  creditLimit: number;
+  status: string;
+}
+
+export async function createCard(
+  app: NestFastifyApplication,
+  accessToken: string,
+  overrides: {
+    alias?: string;
+    institution?: string;
+    last4?: string;
+    creditLimit?: number;
+    annualRateBps?: number;
+    cutDay?: number;
+    dueDateMode?: string;
+    dueDay?: number;
+    dueDaysAfterCut?: number;
+    dueNonBusinessDayRule?: string;
+    sameDayCutIncluded?: boolean;
+    openingBalance?: number;
+    openingDate?: string;
+  } = {},
+): Promise<CreditCardFixture> {
+  const response = await request(app.getHttpServer())
+    .post('/api/v1/cards')
+    .set('Authorization', `Bearer ${accessToken}`)
+    .send({
+      alias: overrides.alias ?? `Tarjeta ${randomUUID().slice(0, 6)}`,
+      institution: 'Banco de Pruebas',
+      last4: '4321',
+      creditLimit: 2_000_000,
+      cutDay: 15,
+      dueDaysAfterCut: 20,
+      ...overrides,
+    })
+    .expect(201);
+
+  return response.body as CreditCardFixture;
+}

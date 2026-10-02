@@ -10,6 +10,9 @@ import { AuthModule } from './modules/auth/auth.module';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
 import { RolesGuard } from './modules/auth/guards/roles.guard';
 import { VerifiedEmailGuard } from './modules/auth/guards/verified-email.guard';
+import { CardLedgerModule } from './modules/card-ledger/card-ledger.module';
+import { CardPaymentsModule } from './modules/card-payments/card-payments.module';
+import { CardsModule } from './modules/cards/cards.module';
 import { CashAccountsModule } from './modules/cash-accounts/cash-accounts.module';
 import { CashMovementsModule } from './modules/cash-movements/cash-movements.module';
 import { CategoriesModule } from './modules/categories/categories.module';
@@ -80,6 +83,7 @@ function buildLoggerOptions(config: AppConfigService): Params {
     PrismaModule,
     ClockModule,
     LedgerModule,
+    CardLedgerModule,
     AuthModule,
     UsersModule,
     CategoriesModule,
@@ -87,6 +91,8 @@ function buildLoggerOptions(config: AppConfigService): Params {
     CashMovementsModule,
     ExpensesModule,
     IncomeModule,
+    CardsModule,
+    CardPaymentsModule,
     HealthModule,
   ],
   providers: [

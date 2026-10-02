@@ -49,6 +49,11 @@ model User {
   incomeTransactions IncomeTransaction[]
   recurringExpenses  RecurringExpense[]
   expenses           Expense[]
+  creditCards        CreditCard[]
+  cardLedgerEntries  CardLedgerEntry[]
+  cardStatements     CardStatement[]
+  cardPayments       CardPayment[]
+  paymentAllocations PaymentAllocation[]
   auditLogs          AuditLog[]          @relation("AuditSubject")
   auditLogsAsActor   AuditLog[]          @relation("AuditActor")
   idempotencyRecords IdempotencyRecord[]
@@ -222,6 +227,7 @@ model CashAccount {
   income     IncomeSource[]
   expenses   Expense[]
   recurrences RecurringExpense[]
+  cardPayments CardPayment[]
 
   @@unique([userId, name])
   @@index([userId, deletedAt])
@@ -251,6 +257,7 @@ model CashMovement {
   reversedBy  CashMovement? @relation("MovementReversal")
   expense           Expense?
   incomeTransaction IncomeTransaction?
+  cardPayment       CardPayment?
 
   @@index([userId, cashAccountId, occurredOn])
   @@index([userId, createdAt])
@@ -386,4 +393,148 @@ model Expense {
 
   @@unique([recurringExpenseId, occurrenceDate])
   @@index([userId, expenseDate])
+}
+
+/// Tarjeta de credito del usuario. El saldo es cache del libro de la tarjeta.
+/// RN-12: el corte es un dia fijo del mes (si no existe, el ultimo del mes).
+/// RN-13: la fecha limite se calcula y se ajusta al dia habil anterior.
+/// RN-14: la compra del dia del corte entra en ese corte (configurable).
+model CreditCard {
+  id                    String    @id @default(uuid())
+  userId                String
+  alias                 String
+  institution           String
+  last4                 String
+  currency              String    @default("MXN")
+  status                String    @default("ACTIVE") // ACTIVE | INACTIVE
+  creditLimit           Int
+  /// Cache del libro de la tarjeta, en centavos (positivo = deuda).
+  currentBalance        Int       @default(0)
+  availableCredit       Int       @default(0)
+  balanceVersion        Int       @default(0)
+  annualRateBps         Int       @default(0)
+  annualFee             Int?
+  annualFeeMonth        Int?
+  cutDay                Int
+  dueDateMode           String    @default("DAYS_AFTER_CUT") // FIXED_DAY | DAYS_AFTER_CUT
+  dueDay                Int?
+  dueDaysAfterCut       Int?
+  dueNonBusinessDayRule String    @default("PREVIOUS") // PREVIOUS | NEXT | NONE
+  sameDayCutIncluded    Boolean   @default(true)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  deletedAt             DateTime?
+
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  entries    CardLedgerEntry[]
+  statements CardStatement[]
+  payments   CardPayment[]
+
+  @@unique([userId, alias])
+  @@index([userId, status])
+}
+
+/// Libro de la tarjeta: solo insercion. Positivo aumenta la deuda.
+model CardLedgerEntry {
+  id              String   @id @default(uuid())
+  userId          String
+  creditCardId    String
+  statementId     String?
+  reversesEntryId String?  @unique
+  type            String // OPENING_BALANCE | PURCHASE | INSTALLMENT_PRINCIPAL | INTEREST | FEE | ANNUAL_FEE | PAYMENT | REFUND | ADJUSTMENT | REVERSAL
+  amount          Int
+  occurredOn      String // "YYYY-MM-DD"
+  description     String
+  sourceType      String?
+  sourceId        String?
+  createdById     String
+  createdAt       DateTime @default(now())
+
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  creditCard  CreditCard      @relation(fields: [creditCardId], references: [id], onDelete: Restrict)
+  statement   CardStatement?  @relation(fields: [statementId], references: [id], onDelete: SetNull)
+  reverses    CardLedgerEntry? @relation("CardEntryReversal", fields: [reversesEntryId], references: [id], onDelete: Restrict)
+  reversedBy  CardLedgerEntry? @relation("CardEntryReversal")
+  cardPayment CardPayment?
+
+  @@index([userId, creditCardId, occurredOn])
+  @@index([sourceType, sourceId])
+}
+
+/// Estado de cuenta (corte). statementBalance = deuda total al corte.
+model CardStatement {
+  id                       String   @id @default(uuid())
+  userId                   String
+  creditCardId             String
+  periodStart              String // "YYYY-MM-DD"
+  cutDate                  String // "YYYY-MM-DD"
+  dueDate                  String // "YYYY-MM-DD"
+  statementBalance         Int
+  cycleCharges             Int      @default(0)
+  noInterestPaymentCalc    Int
+  noInterestPaymentReported Int?
+  minimumPaymentReported   Int?
+  minimumPaymentEstimated  Int
+  paidAmount               Int      @default(0)
+  status                   String   @default("CLOSED") // OPEN | CLOSED | PAID | PARTIALLY_PAID | OVERDUE
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  creditCard  CreditCard       @relation(fields: [creditCardId], references: [id], onDelete: Restrict)
+  entries     CardLedgerEntry[]
+  payments    CardPayment[]
+  allocations PaymentAllocation[]
+
+  @@unique([creditCardId, cutDate])
+  @@index([userId, dueDate])
+  @@index([userId, status])
+}
+
+/// Pago de tarjeta financiado con una cuenta de efectivo.
+model CardPayment {
+  id                String   @id @default(uuid())
+  userId            String
+  creditCardId      String
+  cashAccountId     String
+  statementId       String?
+  cashMovementId    String   @unique
+  cardLedgerEntryId String   @unique
+  amount            Int
+  paymentDate       String // "YYYY-MM-DD"
+  type              String   @default("STATEMENT") // STATEMENT | PARTIAL
+  status            String   @default("APPLIED") // APPLIED | REVERSED
+  notes             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user            User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  creditCard      CreditCard          @relation(fields: [creditCardId], references: [id], onDelete: Restrict)
+  cashAccount     CashAccount         @relation(fields: [cashAccountId], references: [id], onDelete: Restrict)
+  statement       CardStatement?      @relation(fields: [statementId], references: [id], onDelete: SetNull)
+  cashMovement    CashMovement        @relation(fields: [cashMovementId], references: [id], onDelete: Restrict)
+  cardLedgerEntry CardLedgerEntry     @relation(fields: [cardLedgerEntryId], references: [id], onDelete: Restrict)
+  allocations     PaymentAllocation[]
+
+  @@index([userId, paymentDate])
+}
+
+/// Aplicacion de un pago: RN-23 (primero lo exigible del corte, luego el saldo).
+model PaymentAllocation {
+  id            String   @id @default(uuid())
+  userId        String
+  cardPaymentId String
+  statementId   String?
+  targetType    String // STATEMENT | INSTALLMENT | REVOLVING
+  /// FK a Installment; se materializa en la Fase 5.
+  installmentId String?
+  amount        Int
+  createdAt     DateTime @default(now())
+
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cardPayment CardPayment    @relation(fields: [cardPaymentId], references: [id], onDelete: Cascade)
+  statement   CardStatement? @relation(fields: [statementId], references: [id], onDelete: SetNull)
+
+  @@index([cardPaymentId])
+  @@index([statementId])
 }

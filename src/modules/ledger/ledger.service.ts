@@ -6,10 +6,9 @@ import {
   UnprocessableEntityError,
 } from '../../common/errors/http-errors';
 import { RequestMeta } from '../../common/http/request-meta';
-import { compareLocalDates, daysBetween } from '../../domain/shared/local-date';
-import { ClockService } from '../../infrastructure/clock/clock.module';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { FinancialDatePolicy } from './financial-date.policy';
 
 export interface PostMovementInput {
   userId: string;
@@ -46,29 +45,12 @@ type PrismaClientLike = Prisma.TransactionClient | PrismaService;
 export class LedgerService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly clock: ClockService,
+    private readonly datePolicy: FinancialDatePolicy,
     private readonly audit: AuditService,
   ) {}
 
-  async assertDateAllowed(userId: string, occurredOn: string): Promise<void> {
-    const settings = await this.prisma.userSettings.findUnique({ where: { userId } });
-    const timeZone = settings?.timezone ?? 'America/Mexico_City';
-    const backdateLimit = settings?.backdateLimitDays ?? 60;
-    const today = this.clock.today(timeZone);
-
-    if (compareLocalDates(occurredOn, today) > 0) {
-      throw new UnprocessableEntityError(
-        'No se pueden registrar movimientos con fecha futura. Los flujos futuros se capturan como ingresos o gastos programados.',
-        { reason: 'FUTURE_DATE_NOT_ALLOWED' },
-      );
-    }
-
-    if (daysBetween(occurredOn, today) > backdateLimit) {
-      throw new UnprocessableEntityError(
-        `La fecha excede el limite de ${backdateLimit} dias hacia atras.`,
-        { reason: 'BACKDATE_LIMIT_EXCEEDED' },
-      );
-    }
+  assertDateAllowed(userId: string, occurredOn: string): Promise<void> {
+    return this.datePolicy.assertAllowed(userId, occurredOn);
   }
 
   async postMovement(
@@ -151,13 +133,15 @@ export class LedgerService {
       throw new ConflictError('El movimiento ya fue revertido.', { reason: 'ALREADY_REVERSED' });
     }
 
+    const occurredOn = await this.datePolicy.today(userId);
+
     return this.postMovement(
       {
         userId,
         cashAccountId: original.cashAccountId,
         type: 'REVERSAL',
         amount: -original.amount,
-        occurredOn: this.clock.today((await this.getTimeZone(userId))),
+        occurredOn,
         description: `Reverso de: ${original.description}`,
         reason,
         sourceType: 'Reversal',
@@ -219,10 +203,5 @@ export class LedgerService {
       corrected: !matches,
       movementCount: aggregate._count._all,
     };
-  }
-
-  private async getTimeZone(userId: string): Promise<string> {
-    const settings = await this.prisma.userSettings.findUnique({ where: { userId } });
-    return settings?.timezone ?? 'America/Mexico_City';
   }
 }

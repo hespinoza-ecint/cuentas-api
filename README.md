@@ -12,7 +12,7 @@ Backend del asistente financiero **Cuentas**: ayuda a decidir qué tarjeta de cr
 | 1 | Base del backend (proyecto, SQLite + Prisma, configuración, errores, logs, Swagger, seed) | ✅ Implementada |
 | 2 | Usuarios y autenticación | ✅ Implementada |
 | 3 | Saldo, ingresos y movimientos | ✅ Implementada |
-| 4 | Tarjetas de crédito | ⏳ Pendiente |
+| 4 | Tarjetas de crédito | ✅ Implementada |
 | 5 | Compras y mensualidades | ⏳ Pendiente |
 | 6 | Motor de recomendaciones | ⏳ Pendiente |
 | 7 | Pruebas y preparación para producción | ⏳ Pendiente |
@@ -143,6 +143,15 @@ cuentas-api/
 | GET | `/api/v1/income/transactions` | Historial de ingresos confirmados/omitidos |
 | POST | `/api/v1/income/transactions/confirm` | Confirma un ingreso real |
 | POST | `/api/v1/income/transactions/skip` | Omite una fecha estimada |
+| GET/POST | `/api/v1/cards` | Tarjetas de crédito y saldo inicial |
+| GET/PATCH/DELETE | `/api/v1/cards/:id` | Detalle, edición y borrado |
+| POST | `/api/v1/cards/:id/reconcile` | Conciliación con el banco |
+| GET | `/api/v1/cards/:id/ledger` | Libro de la tarjeta |
+| GET | `/api/v1/cards/:id/statements` | Estados de cuenta (cortes) |
+| GET | `/api/v1/cards/:id/statements/current` | Ciclo abierto y próximo corte |
+| PATCH | `/api/v1/cards/:id/statements/:statementId` | Montos reportados del corte |
+| GET/POST | `/api/v1/card-payments` | Pagos de tarjeta |
+| POST | `/api/v1/card-payments/:id/reverse` | Reverso de un pago |
 | GET | `/api/docs` | Documentación interactiva (Swagger UI) |
 | GET | `/api/docs-json` | Especificación OpenAPI |
 
@@ -161,3 +170,4 @@ cuentas-api/
 - [Fase 1 — Base del backend](docs/fase-01-base.md)
 - [Fase 2 — Usuarios y autenticación](docs/fase-02-auth.md)
 - [Fase 3 — Saldo, ingresos y movimientos](docs/fase-03-cashflow.md)
+- [Fase 4 — Tarjetas de crédito](docs/fase-04-cards.md)
