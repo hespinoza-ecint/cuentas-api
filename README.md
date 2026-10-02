@@ -186,7 +186,7 @@ cuentas-api/
 - Errores en formato **RFC 9457** (`application/problem+json`) con `code`, `detail`, `instance`, `requestId` y `timestamp`.
 - Todas las respuestas incluyen el encabezado `x-request-id` para correlacionar con los logs (se respeta el `x-request-id` entrante).
 - Paginación por cursor en las colecciones.
-- `Idempotency-Key` en POST financieros (se implementa en las fases 3+).
+- `Idempotency-Key` opcional en POST financieros (replay seguro; implementado con la tabla `IdempotencyRecord`).
 
 ## Documentación por fase
 
@@ -197,3 +197,9 @@ cuentas-api/
 - [Fase 5 — Compras y mensualidades](docs/fase-05-purchases.md)
 - [Fase 6 — Motor de recomendaciones](docs/fase-06-recommendations.md)
 - [Fase 7 — Pruebas y preparación para producción](docs/fase-07-produccion.md)
+
+## Documentación técnica completa
+
+- [Documentación técnica del backend](docs/documentacion-tecnica-backend.md) — documento autocontenido para construir el frontend sin leer el código (14 secciones: arquitectura, base de datos, entidades, reglas de negocio, API completa con ejemplos, OpenAPI, flujos, requisitos de frontend y roadmap).
+- [OpenAPI 3.1](docs/openapi-3.1.json) — especificación importable directamente en Swagger UI/Postman (se genera con `npm run openapi:3.1`).
+- [OpenAPI 3.0](docs/openapi.json) — salida exacta que sirve la aplicación en `GET /api/docs-json`.
