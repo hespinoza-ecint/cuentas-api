@@ -1,0 +1,6 @@
+# Normaliza finales de linea a LF en el repositorio (Windows incluido).
+* text=auto eol=lf
+
+# Los scripts de Windows se mantienen en CRLF.
+*.cmd text eol=crlf
+*.bat text eol=crlf

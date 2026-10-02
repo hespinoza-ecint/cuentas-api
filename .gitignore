@@ -1,0 +1,16 @@
+# Dependencias y compilados
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Variables de entorno (contienen rutas y secretos)
+.env
+.env.local
+.env.production
+
+# Logs y temporales
+*.log
+npm-debug.log*
+Thumbs.db
+.DS_Store

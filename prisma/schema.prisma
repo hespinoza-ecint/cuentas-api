@@ -1,0 +1,142 @@
+// =============================================================================
+// Cuentas API - Esquema de base de datos (Fase 1)
+//
+// Convenciones del proyecto:
+// - Dinero: enteros en centavos (Int). Maximo por campo: $21,474,836.47 MXN.
+// - Tasas: puntos base (3699 = 36.99%).
+// - Fechas de calendario: String(10) en formato "YYYY-MM-DD".
+// - Fechas y horas: DateTime en UTC.
+// - "Enums": String validado en la aplicacion (portabilidad SQLite -> MySQL).
+// - JSON: String validado con Zod en la aplicacion.
+// - Llaves primarias: UUID (String).
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// Usuarios de la aplicacion. Un usuario es dueno de todos sus registros financieros.
+model User {
+  id                  String    @id @default(uuid())
+  email               String    @unique
+  passwordHash        String
+  firstName           String
+  lastName            String
+  role                String    @default("USER") // USER | ADMIN
+  status              String    @default("PENDING_VERIFICATION") // PENDING_VERIFICATION | ACTIVE | PENDING_DELETION | DELETED
+  emailVerifiedAt     DateTime?
+  failedLoginCount    Int       @default(0)
+  lockedUntil         DateTime?
+  lastLoginAt         DateTime?
+  deletionRequestedAt DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  deletedAt           DateTime?
+
+  settings           UserSettings?
+  categories         Category[]
+  auditLogs          AuditLog[]          @relation("AuditSubject")
+  auditLogsAsActor   AuditLog[]          @relation("AuditActor")
+  idempotencyRecords IdempotencyRecord[]
+
+  @@index([status])
+  @@index([deletedAt])
+}
+
+/// Preferencias financieras y regionales del usuario (1:1 con User).
+model UserSettings {
+  userId                  String   @id
+  timezone                String   @default("America/Mexico_City")
+  locale                  String   @default("es-MX")
+  holidayCalendarCode     String   @default("MX_BANKING") // MX_BANKING | MX_LABOR
+  minCashBuffer           Int      @default(0) // colchon minimo de efectivo, en centavos
+  maxUtilizationBps       Int      @default(3000) // 30% de utilizacion recomendada
+  variableIncomeFactorBps Int      @default(9000) // ingresos variables al 90%
+  pendingIncomeGraceDays  Int      @default(3) // dias de gracia para confirmar un ingreso
+  backdateLimitDays       Int      @default(60) // limite de dias hacia atras para movimientos
+  projectionMinDays       Int      @default(60) // horizonte minimo de proyeccion
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+/// Categorias de gastos e ingresos. userId nulo = categoria global del sistema.
+model Category {
+  id        String    @id @default(uuid())
+  userId    String?
+  parentId  String?
+  name      String
+  kind      String // EXPENSE | INCOME | BOTH
+  icon      String?
+  isSystem  Boolean   @default(false)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  user     User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent   Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children Category[] @relation("CategoryHierarchy")
+
+  @@index([userId, parentId, name])
+  @@index([kind])
+}
+
+/// Dias festivos por calendario (MX_LABOR = LFT, MX_BANKING = CNBV).
+model Holiday {
+  id           String   @id @default(uuid())
+  calendarCode String
+  date         String // "YYYY-MM-DD"
+  name         String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([calendarCode, date])
+  @@index([calendarCode])
+}
+
+/// Bitacora de auditoria de operaciones importantes. Solo insercion.
+model AuditLog {
+  id          String   @id @default(uuid())
+  userId      String? // usuario dueno del recurso afectado
+  actorUserId String? // usuario que ejecuto la accion
+  action      String
+  entityType  String
+  entityId    String?
+  changes     String? // JSON con antes/despues
+  ip          String?
+  userAgent   String?
+  requestId   String?
+  createdAt   DateTime @default(now())
+
+  user  User? @relation("AuditSubject", fields: [userId], references: [id], onDelete: SetNull)
+  actor User? @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+/// Registro de idempotencia para POST financieros (evita duplicados por reintentos).
+model IdempotencyRecord {
+  id             String   @id @default(uuid())
+  userId         String
+  key            String
+  method         String
+  path           String
+  requestHash    String
+  responseStatus Int
+  responseBody   String // JSON
+  createdAt      DateTime @default(now())
+  expiresAt      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+  @@index([expiresAt])
+}
