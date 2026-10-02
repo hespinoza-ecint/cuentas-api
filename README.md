@@ -10,7 +10,7 @@ Backend del asistente financiero **Cuentas**: ayuda a decidir qué tarjeta de cr
 |---|---|---|
 | 0 | Análisis, reglas de negocio, arquitectura y modelo de datos | ✅ Cerrada |
 | 1 | Base del backend (proyecto, SQLite + Prisma, configuración, errores, logs, Swagger, seed) | ✅ Implementada |
-| 2 | Usuarios y autenticación | ⏳ Pendiente |
+| 2 | Usuarios y autenticación | ✅ Implementada |
 | 3 | Saldo, ingresos y movimientos | ⏳ Pendiente |
 | 4 | Tarjetas de crédito | ⏳ Pendiente |
 | 5 | Compras y mensualidades | ⏳ Pendiente |
@@ -29,6 +29,8 @@ El documento de la Fase 0 (reglas de negocio RN-01 a RN-26, modelo de datos comp
 - **Zod 4** para validar variables de entorno y configuración JSON
 - **class-validator** para validar DTOs
 - **nestjs-pino 5** para logs estructurados
+- **Argon2id** (`@node-rs/argon2`) para contraseñas
+- **JWT** (`@nestjs/jwt`) con rotación de refresh tokens
 - **Swagger** (OpenAPI 3) en `/api/docs`
 - **Jest + Supertest** para pruebas
 
@@ -105,6 +107,24 @@ cuentas-api/
 |---|---|---|
 | GET | `/health` | Estado del servicio y de la base de datos |
 | GET | `/health/live` | Liveness del proceso |
+| POST | `/api/v1/auth/register` | Registro de usuario |
+| POST | `/api/v1/auth/login` | Inicio de sesión (WEB usa cookie; NATIVE recibe refresh en el cuerpo) |
+| POST | `/api/v1/auth/refresh` | Rotación del refresh token |
+| POST | `/api/v1/auth/logout` | Cierra la sesión actual |
+| POST | `/api/v1/auth/logout-all` | Cierra todas las sesiones |
+| GET | `/api/v1/auth/sessions` | Lista las sesiones activas propias |
+| DELETE | `/api/v1/auth/sessions/:id` | Revoca una sesión propia |
+| POST | `/api/v1/auth/verify-email` | Verifica el correo |
+| POST | `/api/v1/auth/resend-verification` | Reenvía la verificación |
+| POST | `/api/v1/auth/forgot-password` | Solicita restablecer contraseña |
+| POST | `/api/v1/auth/reset-password` | Restablece la contraseña |
+| GET | `/api/v1/users/me` | Perfil del usuario |
+| PATCH | `/api/v1/users/me` | Actualiza el perfil |
+| POST | `/api/v1/users/me/change-password` | Cambia la contraseña |
+| GET/PATCH | `/api/v1/users/me/settings` | Consulta y actualiza la configuración financiera |
+| POST | `/api/v1/users/me/delete` | Solicita la eliminación (30 días de gracia) |
+| POST | `/api/v1/users/me/cancel-deletion` | Cancela la eliminación |
+| GET | `/api/v1/users/me/export` | Exporta los datos en JSON |
 | GET | `/api/docs` | Documentación interactiva (Swagger UI) |
 | GET | `/api/docs-json` | Especificación OpenAPI |
 
@@ -121,3 +141,4 @@ cuentas-api/
 ## Documentación por fase
 
 - [Fase 1 — Base del backend](docs/fase-01-base.md)
+- [Fase 2 — Usuarios y autenticación](docs/fase-02-auth.md)

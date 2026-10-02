@@ -1,7 +1,10 @@
 import { validateEnv } from '../../../src/config/env.schema';
 
 describe('validateEnv', () => {
-  const validConfig = { DATABASE_URL: 'file:C:/tmp/test.db' };
+  const validConfig = {
+    DATABASE_URL: 'file:C:/tmp/test.db',
+    JWT_SECRET: 'secreto-de-pruebas-con-mas-de-32-caracteres-123456',
+  };
 
   it('aplica valores por defecto', () => {
     const env = validateEnv({ ...validConfig });
@@ -36,6 +39,11 @@ describe('validateEnv', () => {
 
   it('rechaza PORT invalido', () => {
     expect(() => validateEnv({ ...validConfig, PORT: 'abc' })).toThrow(/PORT/);
+  });
+
+  it('rechaza JWT_SECRET ausente o demasiado corto', () => {
+    expect(() => validateEnv({ DATABASE_URL: 'file:C:/tmp/test.db' })).toThrow(/JWT_SECRET/);
+    expect(() => validateEnv({ ...validConfig, JWT_SECRET: 'corto' })).toThrow(/JWT_SECRET/);
   });
 
   it('rechaza LOG_LEVEL desconocido', () => {

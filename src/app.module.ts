@@ -5,7 +5,12 @@ import { LoggerModule, Params } from 'nestjs-pino';
 import { AppConfigModule } from './config/app-config.module';
 import { AppConfigService } from './config/app-config.service';
 import { PrismaModule } from './infrastructure/prisma/prisma.module';
+import { AuthModule } from './modules/auth/auth.module';
+import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
+import { RolesGuard } from './modules/auth/guards/roles.guard';
+import { VerifiedEmailGuard } from './modules/auth/guards/verified-email.guard';
 import { HealthModule } from './modules/health/health.module';
+import { UsersModule } from './modules/users/users.module';
 
 function buildLoggerOptions(config: AppConfigService): Params {
   return {
@@ -66,12 +71,17 @@ function buildLoggerOptions(config: AppConfigService): Params {
       }),
     }),
     PrismaModule,
+    AuthModule,
+    UsersModule,
     HealthModule,
   ],
   providers: [
-    // Limite global de peticiones por IP. En la Fase 2 se agregan limites mas
-    // estrictos a las rutas de autenticacion.
+    // Orden de ejecucion de guards globales:
+    // 1) limite de peticiones, 2) autenticacion, 3) roles, 4) correo verificado.
     { provide: APP_GUARD, useClass: ThrottlerGuard },
+    { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_GUARD, useClass: RolesGuard },
+    { provide: APP_GUARD, useClass: VerifiedEmailGuard },
   ],
 })
 export class AppModule {}

@@ -1,0 +1,99 @@
+import { randomUUID } from 'node:crypto';
+import { NestFastifyApplication } from '@nestjs/platform-fastify';
+import request from 'supertest';
+import { MailService } from '../../src/infrastructure/mail/mail.service';
+import { TestMailService } from './test-mail.service';
+
+export const TEST_PASSWORD = 'Password1234';
+
+export function uniqueEmail(prefix = 'user'): string {
+  return `${prefix}-${randomUUID()}@test.local`;
+}
+
+export function mailService(app: NestFastifyApplication): TestMailService {
+  return app.get(MailService) as TestMailService;
+}
+
+export async function registerUser(
+  app: NestFastifyApplication,
+  email: string,
+  overrides: Partial<{ firstName: string; lastName: string; password: string }> = {},
+): Promise<{ email: string; password: string; userId: string }> {
+  const password = overrides.password ?? TEST_PASSWORD;
+
+  const response = await request(app.getHttpServer())
+    .post('/api/v1/auth/register')
+    .send({
+      email,
+      password,
+      firstName: overrides.firstName ?? 'Test',
+      lastName: overrides.lastName ?? 'User',
+    })
+    .expect(201);
+
+  return { email, password, userId: response.body.user.id as string };
+}
+
+export async function verifyUserEmail(
+  app: NestFastifyApplication,
+  email: string,
+): Promise<void> {
+  const token = mailService(app).verificationTokenFor(email);
+  await request(app.getHttpServer()).post('/api/v1/auth/verify-email').send({ token }).expect(200);
+}
+
+export interface LoginResult {
+  accessToken: string;
+  refreshToken?: string;
+  user: {
+    id: string;
+    email: string;
+    emailVerified: boolean;
+    status: string;
+  };
+}
+
+export async function loginUser(
+  app: NestFastifyApplication,
+  email: string,
+  password: string = TEST_PASSWORD,
+  clientType: 'WEB' | 'NATIVE' = 'NATIVE',
+): Promise<LoginResult> {
+  const response = await request(app.getHttpServer())
+    .post('/api/v1/auth/login')
+    .send({ email, password, clientType })
+    .expect(200);
+
+  return response.body as LoginResult;
+}
+
+export interface TestUser {
+  email: string;
+  password: string;
+  accessToken: string;
+  refreshToken: string;
+  userId: string;
+}
+
+/** Registra, verifica el correo e inicia sesion (flujo NATIVE). */
+export async function createVerifiedUser(
+  app: NestFastifyApplication,
+  prefix = 'user',
+): Promise<TestUser> {
+  const email = uniqueEmail(prefix);
+  const { userId } = await registerUser(app, email);
+  await verifyUserEmail(app, email);
+  const session = await loginUser(app, email);
+
+  return {
+    email,
+    password: TEST_PASSWORD,
+    accessToken: session.accessToken,
+    refreshToken: session.refreshToken as string,
+    userId,
+  };
+}
+
+export function authHeader(accessToken: string): [string, string] {
+  return ['Authorization', `Bearer ${accessToken}`];
+}

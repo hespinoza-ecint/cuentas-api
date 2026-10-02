@@ -44,6 +44,20 @@ export const envSchema = z.object({
   // Limite global de peticiones
   THROTTLE_TTL_MS: z.coerce.number().int().positive().default(60000),
   THROTTLE_LIMIT: z.coerce.number().int().positive().default(100),
+
+  // Autenticacion
+  JWT_SECRET: z.string().min(32, 'JWT_SECRET debe tener al menos 32 caracteres'),
+  JWT_ACCESS_TTL_MINUTES: z.coerce.number().int().positive().default(15),
+  JWT_REFRESH_TTL_DAYS: z.coerce.number().int().positive().default(30),
+  AUTH_MAX_FAILED_ATTEMPTS: z.coerce.number().int().positive().default(5),
+  AUTH_LOCK_MINUTES: z.coerce.number().int().positive().default(15),
+  EMAIL_VERIFICATION_TTL_HOURS: z.coerce.number().int().positive().default(24),
+  PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().positive().default(30),
+  AUTH_THROTTLE_TTL_MS: z.coerce.number().int().positive().default(60000),
+  AUTH_THROTTLE_LIMIT: z.coerce.number().int().positive().default(5),
+
+  // URL de la PWA (enlaces de correo)
+  WEB_APP_URL: z.string().url().default('http://localhost:5173'),
 });
 
 export type Env = z.infer<typeof envSchema>;

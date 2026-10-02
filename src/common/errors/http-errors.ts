@@ -53,6 +53,13 @@ export class UnprocessableEntityError extends AppError {
   }
 }
 
+/** 423: cuenta bloqueada temporalmente por intentos fallidos. */
+export class AccountLockedError extends AppError {
+  constructor(detail: string, extensions?: Record<string, unknown>) {
+    super({ code: 'ACCOUNT_LOCKED', status: 423, detail, extensions });
+  }
+}
+
 export class TooManyRequestsError extends AppError {
   constructor(detail = 'Demasiadas solicitudes. Espera un momento antes de reintentar.', extensions?: Record<string, unknown>) {
     super({ code: 'TOO_MANY_REQUESTS', status: 429, detail, extensions });
