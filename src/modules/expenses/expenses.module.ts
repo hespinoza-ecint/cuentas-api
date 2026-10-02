@@ -12,6 +12,6 @@ import { ExpensesRepository } from './repositories/expenses.repository';
   imports: [AuditModule, CategoriesModule, HolidaysModule],
   controllers: [ExpensesController, RecurringExpensesController],
   providers: [ExpensesService, RecurringExpensesService, ExpensesRepository],
-  exports: [ExpensesRepository],
+  exports: [ExpensesRepository, RecurringExpensesService],
 })
 export class ExpensesModule {}

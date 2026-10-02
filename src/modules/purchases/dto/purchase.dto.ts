@@ -68,6 +68,11 @@ export class CreatePurchaseDto {
   @IsString({ message: 'notes debe ser texto' })
   @MaxLength(300, { message: 'notes no debe exceder 300 caracteres' })
   notes?: string;
+
+  /** Liga la compra con la recomendacion que la origino (Fase 6). */
+  @IsOptional()
+  @IsUUID('4', { message: 'recommendationId debe ser un UUID' })
+  recommendationId?: string;
 }
 
 export class ListPurchasesQueryDto {

@@ -22,6 +22,7 @@ import { IncomeModule } from './modules/income/income.module';
 import { InstallmentsModule } from './modules/installments/installments.module';
 import { LedgerModule } from './modules/ledger/ledger.module';
 import { PurchasesModule } from './modules/purchases/purchases.module';
+import { RecommendationsModule } from './modules/recommendations/recommendations.module';
 import { UsersModule } from './modules/users/users.module';
 
 function buildLoggerOptions(config: AppConfigService): Params {
@@ -97,6 +98,7 @@ function buildLoggerOptions(config: AppConfigService): Params {
     CardsModule,
     CardPaymentsModule,
     PurchasesModule,
+    RecommendationsModule,
     HealthModule,
   ],
   providers: [

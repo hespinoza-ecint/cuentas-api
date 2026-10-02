@@ -14,7 +14,7 @@ Backend del asistente financiero **Cuentas**: ayuda a decidir qué tarjeta de cr
 | 3 | Saldo, ingresos y movimientos | ✅ Implementada |
 | 4 | Tarjetas de crédito | ✅ Implementada |
 | 5 | Compras y mensualidades | ✅ Implementada |
-| 6 | Motor de recomendaciones | ⏳ Pendiente |
+| 6 | Motor de recomendaciones | ✅ Implementada |
 | 7 | Pruebas y preparación para producción | ⏳ Pendiente |
 
 El documento de la Fase 0 (reglas de negocio RN-01 a RN-26, modelo de datos completo y plan por fases) está en:
@@ -157,6 +157,12 @@ cuentas-api/
 | POST | `/api/v1/purchases/:id/cancel` | Cancelación o devolución sin pagos |
 | GET | `/api/v1/installment-plans/:id` | Plan de mensualidades |
 | POST | `/api/v1/installment-plans/:id/prepay` | Anticipo o liquidación del plan |
+| POST | `/api/v1/recommendations` | Recomendación de tarjeta (o efectivo) con explicaciones |
+| GET | `/api/v1/recommendations` | Historial de recomendaciones |
+| GET | `/api/v1/recommendations/:id` | Detalle con snapshots reproducibles |
+| GET | `/api/v1/recommendation-rules` | Reglas del motor (globales + overrides) |
+| PUT/DELETE | `/api/v1/recommendation-rules/:code/override` | Sobrescribe o restablece una regla |
+| PATCH | `/api/v1/admin/recommendation-rules/:code` | Ajuste global (solo ADMIN) |
 | GET | `/api/docs` | Documentación interactiva (Swagger UI) |
 | GET | `/api/docs-json` | Especificación OpenAPI |
 
@@ -177,3 +183,4 @@ cuentas-api/
 - [Fase 3 — Saldo, ingresos y movimientos](docs/fase-03-cashflow.md)
 - [Fase 4 — Tarjetas de crédito](docs/fase-04-cards.md)
 - [Fase 5 — Compras y mensualidades](docs/fase-05-purchases.md)
+- [Fase 6 — Motor de recomendaciones](docs/fase-06-recommendations.md)

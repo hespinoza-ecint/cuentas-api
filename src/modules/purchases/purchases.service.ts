@@ -92,6 +92,17 @@ export class PurchasesService {
       await this.categories.assertUsable(userId, dto.categoryId, 'EXPENSE');
     }
 
+    if (dto.recommendationId) {
+      const recommendation = await this.prisma.recommendationHistory.findFirst({
+        where: { id: dto.recommendationId, userId },
+      });
+      if (!recommendation) {
+        throw new BadRequestError('La recomendacion indicada no existe.', {
+          reason: 'RECOMMENDATION_NOT_FOUND',
+        });
+      }
+    }
+
     if (dto.type === 'REGULAR') {
       const purchase = await this.prisma.$transaction(async (tx) => {
         const created = await this.purchases.create(
@@ -105,6 +116,7 @@ export class PurchasesService {
             type: 'REGULAR',
             status: 'ACTIVE',
             notes: dto.notes,
+            recommendationId: dto.recommendationId,
           },
           tx,
         );
@@ -211,6 +223,7 @@ export class PurchasesService {
           type: dto.type,
           status: 'ACTIVE',
           notes: dto.notes,
+          recommendationId: dto.recommendationId,
         },
         tx,
       );

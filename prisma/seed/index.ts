@@ -1,6 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import { categories } from './data/categories';
 import { holidays } from './data/holidays';
+import { recommendationRules } from './data/recommendation-rules';
 
 const prisma = new PrismaClient();
 
@@ -78,6 +79,39 @@ async function seedHolidays(): Promise<{ total: number; calendars: string[] }> {
   return { total: holidays.length, calendars };
 }
 
+async function seedRecommendationRules(): Promise<{ created: number; updated: number }> {
+  let created = 0;
+  let updated = 0;
+
+  for (const rule of recommendationRules) {
+    const existing = await prisma.recommendationRule.findUnique({ where: { code: rule.code } });
+
+    if (existing) {
+      // No se pisan pesos ni parametros: el admin pudo haberlos ajustado.
+      await prisma.recommendationRule.update({
+        where: { code: rule.code },
+        data: { name: rule.name, description: rule.description, kind: rule.kind },
+      });
+      updated += 1;
+    } else {
+      await prisma.recommendationRule.create({
+        data: {
+          code: rule.code,
+          name: rule.name,
+          description: rule.description,
+          kind: rule.kind,
+          weight: rule.weight,
+          params: rule.params ? JSON.stringify(rule.params) : null,
+          isEnabled: true,
+        },
+      });
+      created += 1;
+    }
+  }
+
+  return { created, updated };
+}
+
 async function main(): Promise<void> {
   // En SQLite se activa WAL una sola vez aqui: las aplicaciones que se
   // conecten despues lo reutilizan sin necesidad de bloquear la base.
@@ -95,6 +129,11 @@ async function main(): Promise<void> {
   const holidayResult = await seedHolidays();
   console.log(
     `Festivos: ${holidayResult.total} registros en ${holidayResult.calendars.join(', ')}.`,
+  );
+
+  const rulesResult = await seedRecommendationRules();
+  console.log(
+    `Reglas de recomendacion: ${rulesResult.created} creadas, ${rulesResult.updated} actualizadas.`,
   );
 
   console.log('Seed completado.');

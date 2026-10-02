@@ -57,6 +57,8 @@ model User {
   purchases          Purchase[]
   installmentPlans   InstallmentPlan[]
   installments       Installment[]
+  recommendationHistory RecommendationHistory[]
+  ruleOverrides      UserRecommendationRuleOverride[]
   auditLogs          AuditLog[]          @relation("AuditSubject")
   auditLogsAsActor   AuditLog[]          @relation("AuditActor")
   idempotencyRecords IdempotencyRecord[]
@@ -436,6 +438,7 @@ model CreditCard {
   payments   CardPayment[]
   purchases  Purchase[]
   plans      InstallmentPlan[]
+  recommendations RecommendationHistory[]
 
   @@unique([userId, alias])
   @@index([userId, status])
@@ -575,6 +578,7 @@ model Purchase {
   category         Category?         @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   recurringExpense RecurringExpense? @relation(fields: [recurringExpenseId], references: [id], onDelete: SetNull)
   installmentPlan  InstallmentPlan?
+  recommendation   RecommendationHistory? @relation(fields: [recommendationId], references: [id], onDelete: SetNull)
 
   @@index([userId, creditCardId, purchaseDate])
   @@index([userId, status])
@@ -643,4 +647,60 @@ model Installment {
   @@unique([planId, number])
   @@index([userId, dueDate])
   @@index([userId, status])
+}
+
+/// Reglas configurables del motor de recomendaciones (globales; las administra el admin).
+model RecommendationRule {
+  id          String   @id @default(uuid())
+  code        String   @unique
+  name        String
+  description String
+  kind        String // ELIMINATORY | SCORING
+  weight      Int      @default(0)
+  params      String? // JSON
+  isEnabled   Boolean  @default(true)
+  version     Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  overrides UserRecommendationRuleOverride[]
+}
+
+/// Ajustes por usuario sobre las reglas globales (peso, parametros o desactivacion).
+model UserRecommendationRuleOverride {
+  id        String   @id @default(uuid())
+  userId    String
+  ruleId    String
+  isEnabled Boolean?
+  weight    Int?
+  params    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rule RecommendationRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, ruleId])
+}
+
+/// Historial de recomendaciones con snapshots para reproducir la decision.
+model RecommendationHistory {
+  id                String   @id @default(uuid())
+  userId            String
+  recommendedCardId String?
+  purchaseId        String?
+  engineVersion     String
+  requestInput      String // JSON
+  contextSnapshot   String // JSON
+  rulesSnapshot     String // JSON
+  result            String // JSON
+  outcome           String // CARD | CASH | NONE
+  score             Int?
+  createdAt         DateTime @default(now())
+
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recommendedCard CreditCard? @relation(fields: [recommendedCardId], references: [id], onDelete: SetNull)
+  purchases       Purchase[]
+
+  @@index([userId, createdAt])
 }

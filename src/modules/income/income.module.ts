@@ -11,6 +11,6 @@ import { IncomeRepository } from './repositories/income.repository';
   imports: [AuditModule, CategoriesModule, HolidaysModule],
   controllers: [IncomeSourcesController, IncomeTransactionsController],
   providers: [IncomeService, IncomeRepository],
-  exports: [IncomeRepository],
+  exports: [IncomeRepository, IncomeService],
 })
 export class IncomeModule {}
