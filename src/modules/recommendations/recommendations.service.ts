@@ -13,7 +13,7 @@ import {
   ResolvedRule,
   RuleKind,
 } from '../../domain/recommendation/types';
-import { addDays } from '../../domain/shared/local-date';
+import { addDays, buildLocalDate, compareLocalDates } from '../../domain/shared/local-date';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { StatementsService } from '../cards/statements.service';
@@ -108,6 +108,16 @@ export class RecommendationsService {
             description: `Mensualidad ${card.alias}`,
           });
         }
+      }
+
+      // RN-24: la anualidad se proyecta como cargo futuro.
+      if (card.annualFee && card.annualFee > 0 && card.annualFeeMonth) {
+        obligations.push({
+          date: this.nextAnnualFeeDate(today, card.annualFeeMonth),
+          amount: card.annualFee,
+          cardId: card.id,
+          description: `Anualidad ${card.alias}`,
+        });
       }
     }
 
@@ -416,8 +426,16 @@ export class RecommendationsService {
     });
   }
 
-  private horizonFor(projectionMinDays: number, dto: CreateRecommendationDto): number {
-    if (dto.type === 'REGULAR') {
+  /** RN-24: proxima anualidad (dia 1 del mes configurado). */
+  private nextAnnualFeeDate(today: string, month: number): string {
+    const year = Number(today.slice(0, 4));
+    const candidate = buildLocalDate(year, month, 1);
+    return compareLocalDates(candidate, today) < 0
+      ? buildLocalDate(year + 1, month, 1)
+      : candidate;
+  }
+
+  private horizonFor(projectionMinDays: number, dto: CreateRecommendationDto): number {    if (dto.type === 'REGULAR') {
       return Math.max(projectionMinDays, DEFAULT_HORIZON_DAYS);
     }
 

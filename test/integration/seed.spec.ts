@@ -50,6 +50,10 @@ describe('Datos iniciales (seed)', () => {
   });
 
   it('SQLite trabaja en modo WAL', async () => {
+    if (!(process.env.DATABASE_URL ?? '').startsWith('file:')) {
+      return;
+    }
+
     const rows = await prisma.$queryRawUnsafe<Array<{ journal_mode: string }>>(
       'PRAGMA journal_mode;',
     );

@@ -15,6 +15,7 @@ import { AuthenticatedUser } from '../../common/auth/authenticated-user';
 import { CurrentUser } from '../../common/auth/current-user.decorator';
 import { RequireVerifiedEmail } from '../../common/auth/require-verified-email.decorator';
 import { requestMeta } from '../../common/http/request-meta';
+import { Idempotent } from '../../common/idempotency/idempotent.decorator';
 import { CashMovementsService } from './cash-movements.service';
 import {
   AdjustmentDto,
@@ -35,6 +36,7 @@ export class CashMovementsController {
 
   @Post('adjustments')
   @RequireVerifiedEmail()
+  @Idempotent()
   createAdjustment(
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: AdjustmentDto,

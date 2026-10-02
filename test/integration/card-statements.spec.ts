@@ -1,6 +1,6 @@
 import { NestFastifyApplication } from '@nestjs/platform-fastify';
 import request from 'supertest';
-import { addDays, dayOfWeek, todayInTimeZone } from '../../src/domain/shared/local-date';
+import { addDays, dayOfWeek, daysBetween, todayInTimeZone } from '../../src/domain/shared/local-date';
 import { authHeader, createCard, createVerifiedUser } from '../helpers/api';
 import { createTestApp } from '../helpers/test-app';
 
@@ -80,8 +80,7 @@ describe('Estados de cuenta de tarjeta (integracion)', () => {
     expect([0, 6]).not.toContain(dayOfWeek(response.body.projectedDueDate));
   });
 
-  it('permite sobrescribir el pago para no generar intereses (RN-17)', async () => {
-    const user = await createVerifiedUser(app, 'statements-reported');
+  it('permite sobrescribir el pago para no generar intereses (RN-17)', async () => {    const user = await createVerifiedUser(app, 'statements-reported');
     const today = todayInTimeZone('America/Mexico_City');
     const openingDate = addDays(today, -10);
     const card = await createCard(app, user.accessToken, {
@@ -106,5 +105,36 @@ describe('Estados de cuenta de tarjeta (integracion)', () => {
     expect(updated.body.noInterestPaymentReported).toBe(380000);
     expect(updated.body.minimumPaymentReported).toBe(45000);
     expect(updated.body.status).toBe('CLOSED');
+  });
+
+  it('RN-22: estima intereses cuando el corte esta vencido y sin pagar', async () => {
+    const user = await createVerifiedUser(app, 'statements-interest');
+    const today = todayInTimeZone('America/Mexico_City');
+    const openingDate = addDays(today, -40);
+    const card = await createCard(app, user.accessToken, {
+      openingBalance: 500000,
+      openingDate,
+      cutDay: Number(openingDate.slice(8, 10)),
+      dueDaysAfterCut: 20,
+      annualRateBps: 4800,
+    });
+
+    const response = await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}/statements`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+
+    const overdue = (response.body as Array<{
+      status: string;
+      dueDate: string;
+      estimatedInterest: number;
+      estimatedInterestDays: number;
+    }>).find((statement) => statement.status === 'OVERDUE');
+
+    expect(overdue).toBeDefined();
+    const days = daysBetween((overdue as { dueDate: string }).dueDate, today);
+    const expected = Math.round(((500000 * (4800 / 10_000)) / 360) * days * 1.16);
+    expect(overdue?.estimatedInterest).toBe(expected);
+    expect(overdue?.estimatedInterestDays).toBe(days);
   });
 });

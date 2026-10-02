@@ -15,7 +15,7 @@ Backend del asistente financiero **Cuentas**: ayuda a decidir qué tarjeta de cr
 | 4 | Tarjetas de crédito | ✅ Implementada |
 | 5 | Compras y mensualidades | ✅ Implementada |
 | 6 | Motor de recomendaciones | ✅ Implementada |
-| 7 | Pruebas y preparación para producción | ⏳ Pendiente |
+| 7 | Pruebas y preparación para producción | ✅ Implementada |
 
 El documento de la Fase 0 (reglas de negocio RN-01 a RN-26, modelo de datos completo y plan por fases) está en:
 `C:\Users\Hector.Espinoza\OneDrive - ECI\Devs\Plan\Cuentas-Fase-0-Arquitectura-y-Plan.md`
@@ -85,6 +85,18 @@ Toda la configuración vive en `.env` (ver `.env.example`). La aplicación **no 
 | `npm.cmd run prisma:deploy` | Aplica migraciones (producción) |
 | `npm.cmd run db:seed` | Datos iniciales |
 | `npm.cmd run db:studio` | Explorador visual de la base |
+| `npm.cmd run db:backup` | Respaldo de SQLite con rotación (`VACUUM INTO`) |
+| `npm.cmd run mysql:schema` | Genera el esquema MySQL para pruebas/migración |
+| `npm.cmd run test:mysql -- mysql://...` | Corre toda la suite contra MySQL |
+
+## Despliegue
+
+- **Docker:** `docker compose up -d --build` (la base vive en el volumen `cuentas-data`).
+- **PM2:** `npm run build && pm2 start ecosystem.config.js` (una instancia con SQLite).
+- **Variables:** copia `.env.production.example` a `.env.production`.
+- **Respaldos:** `npm run db:backup` en cron (sugerido diario).
+- **Mantenimiento:** cron diario 03:00 + `POST /api/v1/admin/maintenance/run` (ADMIN).
+- Detalle completo en [docs/fase-07-produccion.md](docs/fase-07-produccion.md).
 
 ## Estructura
 
@@ -184,3 +196,4 @@ cuentas-api/
 - [Fase 4 — Tarjetas de crédito](docs/fase-04-cards.md)
 - [Fase 5 — Compras y mensualidades](docs/fase-05-purchases.md)
 - [Fase 6 — Motor de recomendaciones](docs/fase-06-recommendations.md)
+- [Fase 7 — Pruebas y preparación para producción](docs/fase-07-produccion.md)

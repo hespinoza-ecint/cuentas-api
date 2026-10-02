@@ -14,3 +14,6 @@ coverage/
 npm-debug.log*
 Thumbs.db
 .DS_Store
+
+# Generado para pruebas de MySQL
+prisma/schema.mysql.prisma

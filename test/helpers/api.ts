@@ -145,6 +145,8 @@ export async function createCard(
     last4?: string;
     creditLimit?: number;
     annualRateBps?: number;
+    annualFee?: number;
+    annualFeeMonth?: number;
     cutDay?: number;
     dueDateMode?: string;
     dueDay?: number;

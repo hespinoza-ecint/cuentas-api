@@ -5,6 +5,7 @@ import { AuthenticatedUser } from '../../common/auth/authenticated-user';
 import { CurrentUser } from '../../common/auth/current-user.decorator';
 import { RequireVerifiedEmail } from '../../common/auth/require-verified-email.decorator';
 import { requestMeta } from '../../common/http/request-meta';
+import { Idempotent } from '../../common/idempotency/idempotent.decorator';
 import { PrepayPlanDto } from './dto/purchase.dto';
 import { PurchasesService } from './purchases.service';
 
@@ -21,6 +22,7 @@ export class InstallmentPlansController {
 
   @Post(':id/prepay')
   @RequireVerifiedEmail()
+  @Idempotent()
   prepay(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,

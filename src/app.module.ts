@@ -1,11 +1,12 @@
 import { Module } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule, Params } from 'nestjs-pino';
+import { IdempotencyInterceptor } from './common/idempotency/idempotency.interceptor';
 import { AppConfigModule } from './config/app-config.module';
 import { AppConfigService } from './config/app-config.service';
-import { ClockModule } from './infrastructure/clock/clock.module';
-import { PrismaModule } from './infrastructure/prisma/prisma.module';
+import { ClockModule } from './infrastructure/clock/clock.module';import { PrismaModule } from './infrastructure/prisma/prisma.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
 import { RolesGuard } from './modules/auth/guards/roles.guard';
@@ -21,6 +22,7 @@ import { HealthModule } from './modules/health/health.module';
 import { IncomeModule } from './modules/income/income.module';
 import { InstallmentsModule } from './modules/installments/installments.module';
 import { LedgerModule } from './modules/ledger/ledger.module';
+import { MaintenanceModule } from './modules/maintenance/maintenance.module';
 import { PurchasesModule } from './modules/purchases/purchases.module';
 import { RecommendationsModule } from './modules/recommendations/recommendations.module';
 import { UsersModule } from './modules/users/users.module';
@@ -85,6 +87,7 @@ function buildLoggerOptions(config: AppConfigService): Params {
     }),
     PrismaModule,
     ClockModule,
+    ScheduleModule.forRoot(),
     LedgerModule,
     CardLedgerModule,
     InstallmentsModule,
@@ -99,6 +102,7 @@ function buildLoggerOptions(config: AppConfigService): Params {
     CardPaymentsModule,
     PurchasesModule,
     RecommendationsModule,
+    MaintenanceModule,
     HealthModule,
   ],
   providers: [
@@ -108,6 +112,8 @@ function buildLoggerOptions(config: AppConfigService): Params {
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
     { provide: APP_GUARD, useClass: VerifiedEmailGuard },
+    // Idempotencia para los POST financieros marcados con @Idempotent().
+    { provide: APP_INTERCEPTOR, useClass: IdempotencyInterceptor },
   ],
 })
 export class AppModule {}

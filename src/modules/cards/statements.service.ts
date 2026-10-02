@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { CardStatement, PaymentAllocation, Prisma } from '@prisma/client';
+import { CardStatement, CreditCard, PaymentAllocation, Prisma } from '@prisma/client';
 import { NotFoundError } from '../../common/errors/http-errors';
 import { RequestMeta } from '../../common/http/request-meta';
 import { NonBusinessDayRule } from '../../domain/calendar/business-calendar';
@@ -13,7 +13,7 @@ import {
   statementPeriodStart,
   statementStatusFor,
 } from '../../domain/cards/card-cycle';
-import { addDays, compareLocalDates } from '../../domain/shared/local-date';
+import { addDays, compareLocalDates, daysBetween } from '../../domain/shared/local-date';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { HolidayCalendarService } from '../holidays/holiday-calendar.service';
@@ -37,6 +37,8 @@ const MINIMUM_PAYMENT_BPS = 125; // 1.25% estimado del saldo al corte
 
 export interface StatementWithAllocations extends CardStatement {
   allocations: Array<PaymentAllocation & { cardPayment?: { id: string; paymentDate: string; amount: number } }>;
+  estimatedInterest: number;
+  estimatedInterestDays: number;
 }
 
 @Injectable()
@@ -202,8 +204,11 @@ export class StatementsService {
     return this.cards.listStatements(userId, card.id);
   }
 
-  async list(userId: string, cardId: string): Promise<CardStatement[]> {
-    return this.sync(userId, cardId);
+  async list(userId: string, cardId: string): Promise<Array<CardStatement & { estimatedInterest: number; estimatedInterestDays: number }>> {
+    const statements = await this.sync(userId, cardId);
+    const card = await this.cardsService.get(userId, cardId);
+    const today = await this.datePolicy.today(userId);
+    return statements.map((statement) => this.withEstimatedInterest(statement, card, today));
   }
 
   async get(userId: string, cardId: string, statementId: string): Promise<StatementWithAllocations> {
@@ -220,7 +225,36 @@ export class StatementsService {
       include: { cardPayment: { select: { id: true, paymentDate: true, amount: true } } },
     });
 
-    return { ...statement, allocations };
+    const card = await this.cardsService.get(userId, cardId);
+    const today = await this.datePolicy.today(userId);
+
+    return { ...this.withEstimatedInterest(statement, card, today), allocations };
+  }
+
+  /**
+   * RN-22: interes estimado (aproximado) cuando el corte esta vencido y no se
+   * pago el total: saldo insoluto x tasa anual / 360 x dias x 1.16 (IVA).
+   */
+  private withEstimatedInterest(
+    statement: CardStatement,
+    card: CreditCard,
+    today: string,
+  ): CardStatement & { estimatedInterest: number; estimatedInterestDays: number } {
+    const amountToAvoidInterest =
+      statement.noInterestPaymentReported ?? statement.noInterestPaymentCalc;
+    const outstanding = Math.max(amountToAvoidInterest - statement.paidAmount, 0);
+    const days = Math.max(daysBetween(statement.dueDate, today), 0);
+    const isOverdue = outstanding > 0 && compareLocalDates(statement.dueDate, today) < 0;
+
+    if (!isOverdue || card.annualRateBps <= 0) {
+      return { ...statement, estimatedInterest: 0, estimatedInterestDays: 0 };
+    }
+
+    const estimatedInterest = Math.round(
+      ((outstanding * (card.annualRateBps / 10_000)) / 360) * days * 1.16,
+    );
+
+    return { ...statement, estimatedInterest, estimatedInterestDays: days };
   }
 
   /** Ciclo abierto (aun sin corte): previsto para el motor y la PWA. */

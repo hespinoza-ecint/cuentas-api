@@ -191,4 +191,33 @@ describe('Motor de recomendaciones (integracion)', () => {
       .send({ weight: 35 })
       .expect(200);
   });
+
+  it('RN-24: la anualidad se proyecta como obligacion futura', async () => {
+    const user = await createVerifiedUser(app, 'rec-annual-fee');
+    await createCashAccount(app, user.accessToken, { openingBalance: 1000000 });
+    const today = todayInTimeZone('America/Mexico_City');
+    const currentMonth = Number(today.slice(5, 7));
+    const nextMonth = currentMonth === 12 ? 1 : currentMonth + 1;
+    await createCard(app, user.accessToken, {
+      creditLimit: 2000000,
+      annualFee: 15000,
+      annualFeeMonth: nextMonth,
+    });
+
+    const response = await request(app.getHttpServer())
+      .post('/api/v1/recommendations')
+      .set(...authHeader(user.accessToken))
+      .send({ amount: 100000, purchaseDate: today, type: 'REGULAR' })
+      .expect(201);
+
+    const detail = await request(app.getHttpServer())
+      .get(`/api/v1/recommendations/${response.body.historyId}`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+
+    const obligations = detail.body.contextSnapshot.cardObligations as Array<{
+      description: string;
+    }>;
+    expect(obligations.some((entry) => entry.description.startsWith('Anualidad'))).toBe(true);
+  });
 });

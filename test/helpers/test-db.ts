@@ -11,8 +11,8 @@ export function dataDirectory(): string {
 }
 
 /**
- * Cada worker de Jest usa su propia base SQLite para evitar contencion de
- * escritura entre suites que corren en paralelo.
+ * Cada worker de Jest usa su propia base para evitar contencion de escritura
+ * entre suites que corren en paralelo.
  */
 export function testDatabasePath(workerId = '1'): string {
   return path.join(dataDirectory(), `cuentas.test.${workerId}.db`);
@@ -24,4 +24,20 @@ export const TEST_DB_POOL_SIZE = Number(process.env.TEST_DB_POOL_SIZE ?? 5);
 /** Convierte una ruta de Windows a una URL valida para Prisma/SQLite. */
 export function toDatabaseUrl(filePath: string): string {
   return `file:${filePath.replace(/\\/g, '/')}`;
+}
+
+/**
+ * Con TEST_MYSQL_URL (mysql://usuario:pass@host:puerto) las pruebas corren
+ * contra MySQL; sin ella, contra SQLite.
+ */
+export function isMysqlTests(): boolean {
+  return Boolean(process.env.TEST_MYSQL_URL);
+}
+
+export function testDatabaseUrl(workerId = '1'): string {
+  const base = process.env.TEST_MYSQL_URL;
+  if (base) {
+    return `${base.replace(/\/+$/, '')}/cuentas_test_${workerId}`;
+  }
+  return toDatabaseUrl(testDatabasePath(workerId));
 }

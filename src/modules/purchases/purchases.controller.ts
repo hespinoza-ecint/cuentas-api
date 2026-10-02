@@ -14,6 +14,7 @@ import { AuthenticatedUser } from '../../common/auth/authenticated-user';
 import { CurrentUser } from '../../common/auth/current-user.decorator';
 import { RequireVerifiedEmail } from '../../common/auth/require-verified-email.decorator';
 import { requestMeta } from '../../common/http/request-meta';
+import { Idempotent } from '../../common/idempotency/idempotent.decorator';
 import {
   CancelPurchaseDto,
   CreatePurchaseDto,
@@ -34,6 +35,7 @@ export class PurchasesController {
 
   @Post()
   @RequireVerifiedEmail()
+  @Idempotent()
   create(
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: CreatePurchaseDto,
