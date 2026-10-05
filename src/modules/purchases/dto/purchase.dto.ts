@@ -1,4 +1,4 @@
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsIn,
   IsInt,
@@ -97,6 +97,7 @@ export class ListPurchasesQueryDto {
   to?: string;
 
   @IsOptional()
+  @Type(() => Number)
   @IsInt({ message: 'limit debe ser un entero' })
   @Min(1, { message: 'limit debe ser al menos 1' })
   @Max(100, { message: 'limit no debe exceder 100' })

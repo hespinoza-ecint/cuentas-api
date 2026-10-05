@@ -177,4 +177,16 @@ describe('Tarjetas de credito (integracion)', () => {
       .send({ alias: 'Robada' })
       .expect(404);
   });
+
+  it('acepta el limite del libro como numero en la query', async () => {
+    const user = await createVerifiedUser(app, 'cards-ledger-limit');
+    const card = await createCard(app, user.accessToken);
+
+    const response = await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}/ledger?limit=20`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+
+    expect(response.body.meta.limit).toBe(20);
+  });
 });

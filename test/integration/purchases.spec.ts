@@ -367,4 +367,15 @@ describe('Compras y mensualidades (integracion)', () => {
       .send({ reason: 'Ajena' })
       .expect(404);
   });
+
+  it('acepta el limite de paginacion como numero en la query', async () => {
+    const user = await createVerifiedUser(app, 'purchases-limit');
+
+    const response = await request(app.getHttpServer())
+      .get('/api/v1/purchases?limit=20')
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+
+    expect(response.body.meta.limit).toBe(20);
+  });
 });
