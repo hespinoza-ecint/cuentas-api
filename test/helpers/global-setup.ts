@@ -39,6 +39,9 @@ function run(command: string, databaseUrl?: string): void {
 export default async function globalSetup(): Promise<void> {
   if (isMysqlTests()) {
     run('node scripts/mysql-schema.mjs');
+    // El cliente de Prisma se genera por proveedor: para MySQL hay que
+    // regenerarlo con el esquema MySQL antes de tocar la base.
+    run('npx prisma generate --schema prisma/schema.mysql.prisma');
 
     for (let index = 1; index <= TEST_DB_POOL_SIZE; index += 1) {
       const databaseUrl = testDatabaseUrl(String(index));
@@ -51,6 +54,9 @@ export default async function globalSetup(): Promise<void> {
     }
     return;
   }
+
+  // Vuelve a generar el cliente para SQLite por si la ultima corrida fue MySQL.
+  run('npx prisma generate');
 
   const directory = path.dirname(testDatabasePath('1'));
   fs.mkdirSync(directory, { recursive: true });

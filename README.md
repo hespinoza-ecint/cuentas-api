@@ -87,17 +87,24 @@ Toda la configuración vive en `.env` (ver `.env.example`). La aplicación **no 
 | `npm.cmd run db:seed` | Datos iniciales |
 | `npm.cmd run db:studio` | Explorador visual de la base |
 | `npm.cmd run db:backup` | Respaldo de SQLite con rotación (`VACUUM INTO`) |
-| `npm.cmd run mysql:schema` | Genera el esquema MySQL para pruebas/migración |
+| `npm.cmd run mysql:schema` | Genera el esquema MySQL (`prisma/schema.mysql.prisma`) |
+| `npm.cmd run mysql:sql` | Genera el SQL de creación para MySQL (`prisma/mysql/init.sql`) |
+| `npm.cmd run mysql:generate` | Genera el cliente Prisma para MySQL |
+| `npm.cmd run mysql:apply` | Aplica `init.sql` a la base con `DATABASE_URL` |
+| `npm.cmd run mysql:diff` | SQL de diferencias entre la base MySQL y el esquema |
 | `npm.cmd run test:mysql -- mysql://...` | Corre toda la suite contra MySQL |
 
 ## Despliegue
 
+- **3 máquinas (API, front y MySQL separados):** guía completa en
+  [docs/despliegue-3-maquinas.md](docs/despliegue-3-maquinas.md) — incluye
+  unidad `systemd`, creación de la base MySQL, nginx y respaldos.
 - **Docker:** `docker compose up -d --build` (la base vive en el volumen `cuentas-data`).
 - **PM2:** `npm run build && pm2 start ecosystem.config.js` (una instancia con SQLite).
-- **Variables:** copia `.env.production.example` a `.env.production`.
-- **Respaldos:** `npm run db:backup` en cron (sugerido diario).
+- **Variables:** copia `.env.production.example` a `.env` (ejemplo con MySQL listo).
+- **Respaldos SQLite:** `npm run db:backup` en cron; con MySQL usa `mysqldump`.
 - **Mantenimiento:** cron diario 03:00 + `POST /api/v1/admin/maintenance/run` (ADMIN).
-- Detalle completo en [docs/fase-07-produccion.md](docs/fase-07-produccion.md).
+- Detalle de fases previas en [docs/fase-07-produccion.md](docs/fase-07-produccion.md).
 
 ## Estructura
 
