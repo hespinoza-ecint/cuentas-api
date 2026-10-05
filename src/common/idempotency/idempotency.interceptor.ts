@@ -11,7 +11,7 @@ import {
 import { createHash } from 'node:crypto';
 import { Reflector } from '@nestjs/core';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { Observable, of, tap } from 'rxjs';
+import { Observable, mergeMap, of } from 'rxjs';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { IDEMPOTENT_KEY } from './idempotent.decorator';
@@ -92,12 +92,14 @@ export class IdempotencyInterceptor implements NestInterceptor {
     }
 
     return next.handle().pipe(
-      tap((body) => {
+      // Se espera a que el registro quede guardado antes de responder: si otra
+      // peticion reintenta con la misma llave, el registro ya debe existir.
+      mergeMap(async (body) => {
         const reply = context.switchToHttp().getResponse<FastifyReply>();
         const status = reply.statusCode ?? 201;
 
-        void this.prisma.idempotencyRecord
-          .create({
+        try {
+          await this.prisma.idempotencyRecord.create({
             data: {
               userId,
               key,
@@ -108,10 +110,12 @@ export class IdempotencyInterceptor implements NestInterceptor {
               responseBody: JSON.stringify(body ?? null),
               expiresAt: new Date(Date.now() + RETENTION_HOURS * 3_600_000),
             },
-          })
-          .catch(() => {
-            // Otra peticion con la misma llave gano la carrera; el reintento ya respondio.
           });
+        } catch {
+          // Otra peticion con la misma llave gano la carrera; el reintento ya respondio.
+        }
+
+        return body;
       }),
     );
   }
