@@ -2,7 +2,7 @@
 
 > **Versión del documento:** 1.0 · **Fecha:** 2 de octubre de 2026
 > **Base analizada:** código implementado en `C:\Users\Hector.Espinoza\OneDrive - ECI\Devs\Cuentas\cuentas-api`
-> **Alcance:** Fases 0 a 7 completadas · 26 tablas · 66 rutas · 87 endpoints · 35 suites / 163 pruebas
+> **Alcance:** Fases 0 a 8 completadas · 26 tablas · 69 rutas · 92 endpoints · 38 suites / 172 pruebas
 >
 > Documento autocontenido: permite construir el frontend (PWA o app nativa) **sin leer el código fuente**.
 
@@ -1201,6 +1201,16 @@ erDiagram
 
 Los días que no existen en un mes se ajustan al último día. Las fechas se ajustan por la regla de día inhábil (`PREVIOUS`/`NEXT`/`NONE`).
 
+## 6.10 Categorías propias
+
+| DTO | Campo | Tipo | Validación |
+|---|---|---|---|
+| **CreateCategoryDto** | name | string | no vacío, máx 60, único por usuario (sin distinguir mayúsculas) |
+| | kind | enum | `EXPENSE` \| `INCOME` \| `BOTH` |
+| | parentId? | uuid | categoría visible, un solo nivel de anidación, tipo compatible |
+| | icon? | string | máx 40 |
+| **UpdateCategoryDto** | name?, kind?, parentId? (`null` desliga del padre), icon? | | mismas reglas |
+
 ---
 
 # 7. Reglas de Negocio
@@ -1566,12 +1576,31 @@ Errores: `401 INVALID_REFRESH_TOKEN`, `401 REFRESH_TOKEN_REUSED` (familia revoca
 
 ## 9.4 Categorías
 
+| Método | Ruta | Descripción |
+|---|---|---|
+| GET | `/categories?kind=EXPENSE\|INCOME` | Globales (`isSystem`) + propias |
+| POST | `/categories` | Crea categoría propia |
+| PATCH | `/categories/:id` | Edita nombre, tipo, padre o ícono |
+| DELETE | `/categories/:id` | Borrado lógico (bloquea con hijos activos) |
+
 **GET /categories?kind=EXPENSE|INCOME → 200**
 ```json
 [ { "id": "uuid", "userId": null, "parentId": null, "name": "Alimentos", "kind": "EXPENSE",
     "icon": "restaurant", "isSystem": true } ]
 ```
 Devuelve globales (`isSystem`) + propias, ordenadas por sistema y nombre. `kind` filtra incluyendo `BOTH`.
+
+**POST /categories → 201**
+```json
+// Request
+{ "name": "Mascotas", "kind": "EXPENSE", "parentId": null, "icon": "paw" }
+// Response
+{ "id": "uuid", "userId": "uuid", "parentId": null, "name": "Mascotas",
+  "kind": "EXPENSE", "icon": "paw", "isSystem": false }
+```
+Errores: `409 CATEGORY_NAME_TAKEN`, `400 PARENT_CATEGORY_NOT_FOUND`, `400 CATEGORY_NESTING_LIMIT`, `400 CATEGORY_KIND_MISMATCH`, `400 SELF_PARENT`.
+**PATCH /categories/:id → 200** · Acepta `name`, `kind`, `parentId` (`null` desliga del padre) e `icon`.
+**DELETE /categories/:id → 204** · Errores: `422 SYSTEM_CATEGORY_READ_ONLY` (categorías del sistema), `422 CATEGORY_HAS_CHILDREN`, `404` para categorías ajenas. Las mutaciones exigen correo verificado.
 
 ## 9.5 Cuentas de efectivo
 
@@ -1999,6 +2028,45 @@ Si `outcome: "NONE"`: `recommended` ausente y `suggestions` con `{ code: "RETRY_
   "idempotencyDeleted": 0, "usersPurged": 0 }
 ```
 
+## 9.16 Flujo de efectivo y dashboard
+
+**GET /cashflow/projection?days=60 → 200**
+```json
+{ "today": "2026-10-05", "timezone": "America/Mexico_City", "horizonDays": 60,
+  "startingBalance": 500000, "minCashBuffer": 0,
+  "points": [
+    { "date": "2026-10-06", "inflows": 0, "outflows": 700000, "balance": -200000,
+      "events": [ { "type": "RECURRING_EXPENSE", "description": "Renta", "amount": -700000,
+                    "recurringExpenseId": "uuid" } ] },
+    { "date": "2026-10-08", "inflows": 100000, "outflows": 0, "balance": -100000,
+      "events": [ { "type": "INCOME", "description": "Bono", "amount": 100000,
+                    "incomeSourceId": "uuid", "incomeScheduleId": "uuid" } ] } ],
+  "minimum": { "date": "2026-10-06", "balance": -200000 },
+  "finalBalance": -100000, "belowBuffer": true }
+```
+Tipos de evento: `INCOME`, `RECURRING_EXPENSE`, `CARD_STATEMENT`, `INSTALLMENT`, `ANNUAL_FEE` (montos con signo; positivo suma al efectivo). `days` 1–365 (default 60). Usa el mismo contexto que el motor de recomendaciones (RN-09/10/11, cortes, mensualidades y anualidades).
+
+**GET /dashboard/summary?month=YYYY-MM → 200**
+```json
+{ "today": "2026-10-05", "timezone": "America/Mexico_City", "month": "2026-10",
+  "cash": { "spendableBalance": 975000, "totalBalance": 975000, "accountCount": 1 },
+  "cards": { "totalDebt": 200000, "totalAvailableCredit": 800000,
+    "items": [ { "id": "uuid", "alias": "Oro", "last4": "4321", "creditLimit": 1000000,
+                 "currentBalance": 200000, "availableCredit": 800000, "utilizationBps": 2000,
+                 "nextCutDate": "2026-10-05", "nextDueDate": "2026-10-26", "pendingPayment": 200000 } ] },
+  "upcomingIncome": { "horizonDays": 30, "total": 100000,
+    "items": [ { "incomeSourceId": "uuid", "incomeScheduleId": "uuid", "name": "Bono",
+                 "date": "2026-10-10", "amount": 100000, "overdue": false } ] },
+  "upcomingPayments": { "horizonDays": 30, "total": 200000,
+    "items": [ { "type": "CARD_STATEMENT", "description": "Pago Oro (corte 2026-10-05)",
+                 "date": "2026-10-26", "amount": 200000, "cardAlias": "Oro" } ] },
+  "expenses": { "month": "2026-10", "spent": 25000, "previousMonth": "2026-09", "previousSpent": 0,
+    "topCategories": [ { "categoryId": "uuid", "name": "Supermercado", "amount": 25000 } ] },
+  "lastRecommendation": { "id": "uuid", "outcome": "CARD", "score": 89, "cardAlias": "Oro",
+                          "last4": "4321", "createdAt": "..." } }
+```
+`month` es opcional (default: mes actual del usuario). Errores: `400` si no tiene formato `YYYY-MM`; `401` sin token.
+
 ---
 
 # 10. OpenAPI / Swagger
@@ -2010,7 +2078,7 @@ Si `outcome: "NONE"`: `recommended` ausente y `suggestions` con `{ code: "RETRY_
 | `docs/openapi.json` | OpenAPI 3.0.0 | Especificación tal como la sirve la aplicación (`GET /api/docs-json`) |
 | `docs/openapi-3.1.json` | **OpenAPI 3.1.0** | Conversión oficial del proyecto (`npm run openapi:3.1`): proveedor 3.1, `nullable` → tipos unión con `null`, sin palabras incompatibles |
 
-**Estadísticas:** 66 rutas · 87 operaciones · 46 esquemas · 46 KB.
+**Estadísticas:** 69 rutas · 92 operaciones · 48 esquemas · 48 KB.
 
 **Importación directa:**
 - **Swagger UI:** <https://editor.swagger.io> → *File → Import file* → seleccionar `docs/openapi-3.1.json`.
@@ -2613,6 +2681,111 @@ Si `outcome: "NONE"`: `recommended` ausente y `suggestions` con `{ code: "RETRY_
         "tags": [
           "categories"
         ]
+      },
+      "post": {
+        "operationId": "CategoriesController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCategoryDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "categories"
+        ]
+      }
+    },
+    "/api/v1/categories/{id}": {
+      "patch": {
+        "operationId": "CategoriesController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCategoryDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "categories"
+        ]
+      },
+      "delete": {
+        "operationId": "CategoriesController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "categories"
+        ]
       }
     },
     "/api/v1/cash-accounts": {
@@ -3033,6 +3206,896 @@ Si `outcome: "NONE"`: `recommended` ausente y `suggestions` con `{ code: "RETRY_
         ],
         "tags": [
           "cash-movements"
+        ]
+      }
+    },
+    "/api/v1/cashflow/projection": {
+      "get": {
+        "operationId": "CashflowController_projection",
+        "parameters": [
+          {
+            "name": "days",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 365,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "cashflow"
+        ]
+      }
+    },
+    "/api/v1/cards": {
+      "get": {
+        "operationId": "CardsController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "cards"
+        ]
+      },
+      "post": {
+        "operationId": "CardsController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCardDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "cards"
+        ]
+      }
+    },
+    "/api/v1/cards/{id}": {
+      "get": {
+        "operationId": "CardsController_get",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "cards"
+        ]
+      },
+      "patch": {
+        "operationId": "CardsController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCardDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "cards"
+        ]
+      },
+      "delete": {
+        "operationId": "CardsController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "cards"
+        ]
+      }
+    },
+    "/api/v1/cards/{id}/reconcile": {
+      "post": {
+        "operationId": "CardsController_reconcile",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReconcileCardDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "cards"
+        ]
+      }
+    },
+    "/api/v1/cards/{id}/ledger": {
+      "get": {
+        "operationId": "CardsController_ledger",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "type",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "OPENING_BALANCE",
+                "PURCHASE",
+                "INSTALLMENT_PRINCIPAL",
+                "INTEREST",
+                "FEE",
+                "ANNUAL_FEE",
+                "PAYMENT",
+                "REFUND",
+                "ADJUSTMENT",
+                "REVERSAL"
+              ]
+            }
+          },
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "cards"
+        ]
+      }
+    },
+    "/api/v1/cards/{id}/statements": {
+      "get": {
+        "operationId": "CardsController_listStatements",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "cards"
+        ]
+      }
+    },
+    "/api/v1/cards/{id}/statements/current": {
+      "get": {
+        "operationId": "CardsController_currentCycle",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "cards"
+        ]
+      }
+    },
+    "/api/v1/cards/{id}/statements/{statementId}": {
+      "get": {
+        "operationId": "CardsController_getStatement",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "statementId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "cards"
+        ]
+      },
+      "patch": {
+        "operationId": "CardsController_updateStatement",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "statementId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateStatementDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "cards"
+        ]
+      }
+    },
+    "/api/v1/income/sources": {
+      "get": {
+        "operationId": "IncomeSourcesController_list",
+        "parameters": [
+          {
+            "name": "includeInactive",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "income"
+        ]
+      },
+      "post": {
+        "operationId": "IncomeSourcesController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateIncomeSourceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "income"
+        ]
+      }
+    },
+    "/api/v1/income/sources/{id}": {
+      "get": {
+        "operationId": "IncomeSourcesController_get",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "income"
+        ]
+      },
+      "patch": {
+        "operationId": "IncomeSourcesController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateIncomeSourceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "income"
+        ]
+      },
+      "delete": {
+        "operationId": "IncomeSourcesController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "income"
+        ]
+      }
+    },
+    "/api/v1/income/sources/{id}/schedules": {
+      "post": {
+        "operationId": "IncomeSourcesController_addSchedule",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IncomeScheduleInputDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "income"
+        ]
+      }
+    },
+    "/api/v1/income/sources/{id}/schedules/{scheduleId}": {
+      "patch": {
+        "operationId": "IncomeSourcesController_updateSchedule",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scheduleId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateIncomeScheduleDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "income"
+        ]
+      },
+      "delete": {
+        "operationId": "IncomeSourcesController_deactivateSchedule",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scheduleId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "income"
+        ]
+      }
+    },
+    "/api/v1/income/upcoming": {
+      "get": {
+        "operationId": "IncomeTransactionsController_upcoming",
+        "parameters": [
+          {
+            "name": "incomeSourceId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "days",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 365,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "income"
+        ]
+      }
+    },
+    "/api/v1/income/transactions": {
+      "get": {
+        "operationId": "IncomeTransactionsController_listTransactions",
+        "parameters": [
+          {
+            "name": "incomeSourceId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "CONFIRMED",
+                "SKIPPED",
+                "RESCHEDULED"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "maximum": 100,
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "income"
+        ]
+      }
+    },
+    "/api/v1/income/transactions/confirm": {
+      "post": {
+        "operationId": "IncomeTransactionsController_confirm",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmIncomeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "income"
+        ]
+      }
+    },
+    "/api/v1/income/transactions/skip": {
+      "post": {
+        "operationId": "IncomeTransactionsController_skip",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkipIncomeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "income"
         ]
       }
     },
@@ -3503,15 +4566,16 @@ Si `outcome: "NONE"`: `recommended` ausente y `suggestions` con `{ code: "RETRY_
         ]
       }
     },
-    "/api/v1/income/sources": {
+    "/api/v1/dashboard/summary": {
       "get": {
-        "operationId": "IncomeSourcesController_list",
+        "operationId": "DashboardController_summary",
         "parameters": [
           {
-            "name": "includeInactive",
+            "name": "month",
             "required": false,
             "in": "query",
             "schema": {
+              "pattern": "^\\d{4}-(0[1-9]|1[0-2])$",
               "type": "string"
             }
           }
@@ -3527,839 +4591,7 @@ Si `outcome: "NONE"`: `recommended` ausente y `suggestions` con `{ code: "RETRY_
           }
         ],
         "tags": [
-          "income"
-        ]
-      },
-      "post": {
-        "operationId": "IncomeSourcesController_create",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateIncomeSourceDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "income"
-        ]
-      }
-    },
-    "/api/v1/income/sources/{id}": {
-      "get": {
-        "operationId": "IncomeSourcesController_get",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "income"
-        ]
-      },
-      "patch": {
-        "operationId": "IncomeSourcesController_update",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdateIncomeSourceDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "income"
-        ]
-      },
-      "delete": {
-        "operationId": "IncomeSourcesController_remove",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "income"
-        ]
-      }
-    },
-    "/api/v1/income/sources/{id}/schedules": {
-      "post": {
-        "operationId": "IncomeSourcesController_addSchedule",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/IncomeScheduleInputDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "income"
-        ]
-      }
-    },
-    "/api/v1/income/sources/{id}/schedules/{scheduleId}": {
-      "patch": {
-        "operationId": "IncomeSourcesController_updateSchedule",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "scheduleId",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdateIncomeScheduleDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "income"
-        ]
-      },
-      "delete": {
-        "operationId": "IncomeSourcesController_deactivateSchedule",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "scheduleId",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "income"
-        ]
-      }
-    },
-    "/api/v1/income/upcoming": {
-      "get": {
-        "operationId": "IncomeTransactionsController_upcoming",
-        "parameters": [
-          {
-            "name": "incomeSourceId",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "format": "uuid",
-              "type": "string"
-            }
-          },
-          {
-            "name": "days",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "minimum": 1,
-              "maximum": 365,
-              "type": "number"
-            }
-          },
-          {
-            "name": "limit",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "minimum": 1,
-              "maximum": 100,
-              "type": "number"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "income"
-        ]
-      }
-    },
-    "/api/v1/income/transactions": {
-      "get": {
-        "operationId": "IncomeTransactionsController_listTransactions",
-        "parameters": [
-          {
-            "name": "incomeSourceId",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "format": "uuid",
-              "type": "string"
-            }
-          },
-          {
-            "name": "status",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "enum": [
-                "CONFIRMED",
-                "SKIPPED",
-                "RESCHEDULED"
-              ]
-            }
-          },
-          {
-            "name": "limit",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "maximum": 100,
-              "type": "number"
-            }
-          },
-          {
-            "name": "cursor",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "format": "uuid",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "income"
-        ]
-      }
-    },
-    "/api/v1/income/transactions/confirm": {
-      "post": {
-        "operationId": "IncomeTransactionsController_confirm",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ConfirmIncomeDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "income"
-        ]
-      }
-    },
-    "/api/v1/income/transactions/skip": {
-      "post": {
-        "operationId": "IncomeTransactionsController_skip",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SkipIncomeDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "income"
-        ]
-      }
-    },
-    "/api/v1/cards": {
-      "get": {
-        "operationId": "CardsController_list",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "cards"
-        ]
-      },
-      "post": {
-        "operationId": "CardsController_create",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateCardDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "cards"
-        ]
-      }
-    },
-    "/api/v1/cards/{id}": {
-      "get": {
-        "operationId": "CardsController_get",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "cards"
-        ]
-      },
-      "patch": {
-        "operationId": "CardsController_update",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdateCardDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "cards"
-        ]
-      },
-      "delete": {
-        "operationId": "CardsController_remove",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "cards"
-        ]
-      }
-    },
-    "/api/v1/cards/{id}/reconcile": {
-      "post": {
-        "operationId": "CardsController_reconcile",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ReconcileCardDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "cards"
-        ]
-      }
-    },
-    "/api/v1/cards/{id}/ledger": {
-      "get": {
-        "operationId": "CardsController_ledger",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "type",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "enum": [
-                "OPENING_BALANCE",
-                "PURCHASE",
-                "INSTALLMENT_PRINCIPAL",
-                "INTEREST",
-                "FEE",
-                "ANNUAL_FEE",
-                "PAYMENT",
-                "REFUND",
-                "ADJUSTMENT",
-                "REVERSAL"
-              ]
-            }
-          },
-          {
-            "name": "from",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "to",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "limit",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "minimum": 1,
-              "maximum": 100,
-              "type": "number"
-            }
-          },
-          {
-            "name": "cursor",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "cards"
-        ]
-      }
-    },
-    "/api/v1/cards/{id}/statements": {
-      "get": {
-        "operationId": "CardsController_listStatements",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "type": "object"
-                  }
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "cards"
-        ]
-      }
-    },
-    "/api/v1/cards/{id}/statements/current": {
-      "get": {
-        "operationId": "CardsController_currentCycle",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "cards"
-        ]
-      }
-    },
-    "/api/v1/cards/{id}/statements/{statementId}": {
-      "get": {
-        "operationId": "CardsController_getStatement",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "statementId",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "cards"
-        ]
-      },
-      "patch": {
-        "operationId": "CardsController_updateStatement",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "statementId",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdateStatementDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "cards"
+          "dashboard"
         ]
       }
     },
@@ -5518,6 +5750,63 @@ Si `outcome: "NONE"`: `recommended` ausente y `suggestions` con `{ code: "RETRY_
           "password"
         ]
       },
+      "CreateCategoryDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 60
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "EXPENSE",
+              "INCOME",
+              "BOTH"
+            ]
+          },
+          "parentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "icon": {
+            "type": "string",
+            "maxLength": 40
+          }
+        },
+        "required": [
+          "name",
+          "kind"
+        ]
+      },
+      "UpdateCategoryDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 60
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "EXPENSE",
+              "INCOME",
+              "BOTH"
+            ]
+          },
+          "parentId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "icon": {
+            "type": "string",
+            "maxLength": 40
+          }
+        }
+      },
       "CreateCashAccountDto": {
         "type": "object",
         "properties": {
@@ -5665,206 +5954,200 @@ Si `outcome: "NONE"`: `recommended` ausente y `suggestions` con `{ code: "RETRY_
           "reason"
         ]
       },
-      "CreateExpenseDto": {
+      "CreateCardDto": {
         "type": "object",
         "properties": {
-          "cashAccountId": {
+          "alias": {
             "type": "string",
-            "format": "uuid"
+            "maxLength": 60
           },
-          "categoryId": {
+          "institution": {
             "type": "string",
-            "format": "uuid"
+            "maxLength": 80
           },
-          "description": {
+          "last4": {
             "type": "string",
-            "maxLength": 200
+            "pattern": "^\\d{4}$"
           },
-          "amount": {
+          "creditLimit": {
             "type": "number",
             "minimum": 1,
             "maximum": 2147483647
           },
-          "expenseDate": {
-            "type": "string"
+          "annualRateBps": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10000
           },
-          "notes": {
+          "annualFee": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "annualFeeMonth": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 12
+          },
+          "cutDay": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 31
+          },
+          "dueDateMode": {
             "type": "string",
-            "maxLength": 300
+            "enum": [
+              "FIXED_DAY",
+              "DAYS_AFTER_CUT"
+            ]
+          },
+          "dueDay": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 31
+          },
+          "dueDaysAfterCut": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 60
+          },
+          "dueNonBusinessDayRule": {
+            "type": "string",
+            "enum": [
+              "PREVIOUS",
+              "NEXT",
+              "NONE"
+            ]
+          },
+          "sameDayCutIncluded": {
+            "type": "boolean"
+          },
+          "openingBalance": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "openingDate": {
+            "type": "string"
           }
         },
         "required": [
-          "cashAccountId",
-          "description",
-          "amount",
-          "expenseDate"
+          "alias",
+          "institution",
+          "last4",
+          "creditLimit",
+          "cutDay"
         ]
       },
-      "ReverseExpenseDto": {
+      "UpdateCardDto": {
         "type": "object",
         "properties": {
+          "alias": {
+            "type": "string",
+            "maxLength": 60
+          },
+          "institution": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "creditLimit": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "annualRateBps": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "annualFee": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "annualFeeMonth": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 12
+          },
+          "cutDay": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 31
+          },
+          "dueDateMode": {
+            "type": "string",
+            "enum": [
+              "FIXED_DAY",
+              "DAYS_AFTER_CUT"
+            ]
+          },
+          "dueDay": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 31
+          },
+          "dueDaysAfterCut": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 60
+          },
+          "dueNonBusinessDayRule": {
+            "type": "string",
+            "enum": [
+              "PREVIOUS",
+              "NEXT",
+              "NONE"
+            ]
+          },
+          "sameDayCutIncluded": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "INACTIVE"
+            ]
+          }
+        }
+      },
+      "ReconcileCardDto": {
+        "type": "object",
+        "properties": {
+          "reportedBalance": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "asOfDate": {
+            "type": "string"
+          },
           "reason": {
             "type": "string",
             "maxLength": 300
           }
         },
         "required": [
+          "reportedBalance",
+          "asOfDate",
           "reason"
         ]
       },
-      "RecurringScheduleDto": {
+      "UpdateStatementDto": {
         "type": "object",
         "properties": {
-          "frequency": {
-            "type": "string",
-            "enum": [
-              "WEEKLY",
-              "BIWEEKLY",
-              "MONTHLY",
-              "CUSTOM",
-              "ONE_TIME"
-            ]
-          },
-          "config": {
-            "type": "object",
-            "additionalProperties": true
-          },
-          "nonBusinessDayRule": {
-            "type": "string",
-            "enum": [
-              "PREVIOUS",
-              "NEXT",
-              "NONE"
-            ]
-          },
-          "useHolidays": {
-            "type": "boolean"
-          },
-          "startDate": {
-            "type": "string"
-          },
-          "endDate": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "frequency",
-          "startDate"
-        ]
-      },
-      "CreateRecurringExpenseDto": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "maxLength": 120
-          },
-          "amount": {
+          "noInterestPaymentReported": {
             "type": "number",
-            "minimum": 1,
+            "minimum": 0,
             "maximum": 2147483647
           },
-          "amountType": {
-            "type": "string",
-            "enum": [
-              "FIXED",
-              "VARIABLE"
-            ]
-          },
-          "categoryId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "cashAccountId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "schedule": {
-            "$ref": "#/components/schemas/RecurringScheduleDto"
-          }
-        },
-        "required": [
-          "name",
-          "amount",
-          "cashAccountId",
-          "schedule"
-        ]
-      },
-      "UpdateRecurringExpenseDto": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "maxLength": 120
-          },
-          "amount": {
+          "minimumPaymentReported": {
             "type": "number",
-            "minimum": 1,
+            "minimum": 0,
             "maximum": 2147483647
-          },
-          "amountType": {
-            "type": "string",
-            "enum": [
-              "FIXED",
-              "VARIABLE"
-            ]
-          },
-          "categoryId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "cashAccountId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "config": {
-            "type": "object",
-            "additionalProperties": true
-          },
-          "nonBusinessDayRule": {
-            "type": "string",
-            "enum": [
-              "PREVIOUS",
-              "NEXT",
-              "NONE"
-            ]
-          },
-          "useHolidays": {
-            "type": "boolean"
-          },
-          "startDate": {
-            "type": "string"
-          },
-          "endDate": {
-            "type": "string"
-          },
-          "isActive": {
-            "type": "boolean"
           }
         }
-      },
-      "ConfirmRecurringExpenseDto": {
-        "type": "object",
-        "properties": {
-          "occurrenceDate": {
-            "type": "string"
-          },
-          "actualAmount": {
-            "type": "number",
-            "minimum": 1,
-            "maximum": 2147483647
-          },
-          "actualDate": {
-            "type": "string"
-          },
-          "notes": {
-            "type": "string",
-            "maxLength": 300
-          }
-        },
-        "required": [
-          "occurrenceDate"
-        ]
       },
       "IncomeScheduleInputDto": {
         "type": "object",
@@ -6085,200 +6368,206 @@ Si `outcome: "NONE"`: `recommended` ausente y `suggestions` con `{ code: "RETRY_
           "expectedDate"
         ]
       },
-      "CreateCardDto": {
+      "CreateExpenseDto": {
         "type": "object",
         "properties": {
-          "alias": {
+          "cashAccountId": {
             "type": "string",
-            "maxLength": 60
+            "format": "uuid"
           },
-          "institution": {
+          "categoryId": {
             "type": "string",
-            "maxLength": 80
+            "format": "uuid"
           },
-          "last4": {
+          "description": {
             "type": "string",
-            "pattern": "^\\d{4}$"
+            "maxLength": 200
           },
-          "creditLimit": {
+          "amount": {
             "type": "number",
             "minimum": 1,
             "maximum": 2147483647
           },
-          "annualRateBps": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 10000
-          },
-          "annualFee": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 2147483647
-          },
-          "annualFeeMonth": {
-            "type": "number",
-            "minimum": 1,
-            "maximum": 12
-          },
-          "cutDay": {
-            "type": "number",
-            "minimum": 1,
-            "maximum": 31
-          },
-          "dueDateMode": {
-            "type": "string",
-            "enum": [
-              "FIXED_DAY",
-              "DAYS_AFTER_CUT"
-            ]
-          },
-          "dueDay": {
-            "type": "number",
-            "minimum": 1,
-            "maximum": 31
-          },
-          "dueDaysAfterCut": {
-            "type": "number",
-            "minimum": 1,
-            "maximum": 60
-          },
-          "dueNonBusinessDayRule": {
-            "type": "string",
-            "enum": [
-              "PREVIOUS",
-              "NEXT",
-              "NONE"
-            ]
-          },
-          "sameDayCutIncluded": {
-            "type": "boolean"
-          },
-          "openingBalance": {
-            "type": "number",
-            "minimum": 1,
-            "maximum": 2147483647
-          },
-          "openingDate": {
+          "expenseDate": {
             "type": "string"
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 300
           }
         },
         "required": [
-          "alias",
-          "institution",
-          "last4",
-          "creditLimit",
-          "cutDay"
+          "cashAccountId",
+          "description",
+          "amount",
+          "expenseDate"
         ]
       },
-      "UpdateCardDto": {
+      "ReverseExpenseDto": {
         "type": "object",
         "properties": {
-          "alias": {
-            "type": "string",
-            "maxLength": 60
-          },
-          "institution": {
-            "type": "string",
-            "maxLength": 80
-          },
-          "creditLimit": {
-            "type": "number",
-            "minimum": 1,
-            "maximum": 2147483647
-          },
-          "annualRateBps": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 10000
-          },
-          "annualFee": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 2147483647
-          },
-          "annualFeeMonth": {
-            "type": "number",
-            "minimum": 1,
-            "maximum": 12
-          },
-          "cutDay": {
-            "type": "number",
-            "minimum": 1,
-            "maximum": 31
-          },
-          "dueDateMode": {
-            "type": "string",
-            "enum": [
-              "FIXED_DAY",
-              "DAYS_AFTER_CUT"
-            ]
-          },
-          "dueDay": {
-            "type": "number",
-            "minimum": 1,
-            "maximum": 31
-          },
-          "dueDaysAfterCut": {
-            "type": "number",
-            "minimum": 1,
-            "maximum": 60
-          },
-          "dueNonBusinessDayRule": {
-            "type": "string",
-            "enum": [
-              "PREVIOUS",
-              "NEXT",
-              "NONE"
-            ]
-          },
-          "sameDayCutIncluded": {
-            "type": "boolean"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "ACTIVE",
-              "INACTIVE"
-            ]
-          }
-        }
-      },
-      "ReconcileCardDto": {
-        "type": "object",
-        "properties": {
-          "reportedBalance": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 2147483647
-          },
-          "asOfDate": {
-            "type": "string"
-          },
           "reason": {
             "type": "string",
             "maxLength": 300
           }
         },
         "required": [
-          "reportedBalance",
-          "asOfDate",
           "reason"
         ]
       },
-      "UpdateStatementDto": {
+      "RecurringScheduleDto": {
         "type": "object",
         "properties": {
-          "noInterestPaymentReported": {
+          "frequency": {
+            "type": "string",
+            "enum": [
+              "WEEKLY",
+              "BIWEEKLY",
+              "MONTHLY",
+              "CUSTOM",
+              "ONE_TIME"
+            ]
+          },
+          "config": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "nonBusinessDayRule": {
+            "type": "string",
+            "enum": [
+              "PREVIOUS",
+              "NEXT",
+              "NONE"
+            ]
+          },
+          "useHolidays": {
+            "type": "boolean"
+          },
+          "startDate": {
+            "type": "string"
+          },
+          "endDate": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "frequency",
+          "startDate"
+        ]
+      },
+      "CreateRecurringExpenseDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "amount": {
             "type": "number",
-            "minimum": 0,
+            "minimum": 1,
             "maximum": 2147483647
           },
-          "minimumPaymentReported": {
+          "amountType": {
+            "type": "string",
+            "enum": [
+              "FIXED",
+              "VARIABLE"
+            ]
+          },
+          "categoryId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "cashAccountId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/RecurringScheduleDto"
+          }
+        },
+        "required": [
+          "name",
+          "amount",
+          "cashAccountId",
+          "schedule"
+        ]
+      },
+      "UpdateRecurringExpenseDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "amount": {
             "type": "number",
-            "minimum": 0,
+            "minimum": 1,
             "maximum": 2147483647
+          },
+          "amountType": {
+            "type": "string",
+            "enum": [
+              "FIXED",
+              "VARIABLE"
+            ]
+          },
+          "categoryId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "cashAccountId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "config": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "nonBusinessDayRule": {
+            "type": "string",
+            "enum": [
+              "PREVIOUS",
+              "NEXT",
+              "NONE"
+            ]
+          },
+          "useHolidays": {
+            "type": "boolean"
+          },
+          "startDate": {
+            "type": "string"
+          },
+          "endDate": {
+            "type": "string"
+          },
+          "isActive": {
+            "type": "boolean"
           }
         }
+      },
+      "ConfirmRecurringExpenseDto": {
+        "type": "object",
+        "properties": {
+          "occurrenceDate": {
+            "type": "string"
+          },
+          "actualAmount": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "actualDate": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "occurrenceDate"
+        ]
       },
       "CreateCardPaymentDto": {
         "type": "object",
@@ -6706,7 +6995,7 @@ Todo error responde `application/problem+json`:
 
 | Tabla | Columnas mínimas | Filtros/acciones |
 |---|---|---|
-| Movimientos | fecha, tipo, descripción, cuenta, monto con signo, saldo resultante | cuenta, tipo, rango de fechas, cursor |
+| Movimientos | fecha, tipo, descripción, cuenta, monto con signo | cuenta, tipo, rango de fechas, cursor |
 | Ingresos próximos | fecha esperada, fuente, monto proyectado, estado (vencido), días | confirmar/omitir |
 | Historial de ingresos | fecha real, fuente, esperado vs real, estado | estado |
 | Gastos | fecha, categoría, descripción, monto, estado | rango, categoría, cuenta |
@@ -6782,6 +7071,8 @@ Widgets mínimos:
 5. **Gasto del mes** vs mes anterior (agregado de `/expenses`).
 6. **Última recomendación** con acceso al historial.
 7. **Alerta de colchón**: si el flujo proyectado mínimo cae bajo `minCashBuffer`.
+
+> Todos los widgets se alimentan de `GET /dashboard/summary` (una sola llamada, agregaciones en el servidor). La gráfica de flujo de efectivo usa `GET /cashflow/projection?days=60` (puntos por fecha con ingresos, egresos, saldo y eventos).
 
 ## 12.7 Validaciones visuales
 
@@ -6961,7 +7252,7 @@ RecommendationRule.kind: ELIMINATORY|SCORING
 Holiday calendars: MX_BANKING (default) | MX_LABOR
 ```
 
-## 14.4 Endpoints (87) — lista completa
+## 14.4 Endpoints (92) — lista completa
 
 **Públicos:** `GET /health`, `GET /health/live`, `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/verify-email`, `POST /auth/resend-verification`, `POST /auth/forgot-password`, `POST /auth/reset-password`, `GET /api/docs`, `GET /api/docs-json`.
 
@@ -6969,7 +7260,7 @@ Holiday calendars: MX_BANKING (default) | MX_LABOR
 
 **Usuarios:** `GET /users/me`, `PATCH /users/me`, `POST /users/me/change-password`, `GET /users/me/settings`, `PATCH /users/me/settings`, `POST /users/me/delete`, `POST /users/me/cancel-deletion`, `GET /users/me/export`.
 
-**Categorías:** `GET /categories?kind=EXPENSE|INCOME`.
+**Categorías:** `GET /categories?kind=EXPENSE|INCOME`, `POST /categories`, `PATCH/DELETE /categories/:id`.
 
 **Efectivo:** `GET /cash-accounts`, `POST /cash-accounts`, `POST /cash-accounts/transfer`, `GET /cash-accounts/:id`, `PATCH /cash-accounts/:id`, `DELETE /cash-accounts/:id`, `POST /cash-accounts/:id/opening-balance`, `POST /cash-accounts/:id/recalculate`; `GET /cash-movements`, `POST /cash-movements/adjustments`*, `GET /cash-movements/:id`, `POST /cash-movements/:id/reverse`.
 
@@ -6983,6 +7274,8 @@ Holiday calendars: MX_BANKING (default) | MX_LABOR
 
 **Recomendaciones:** `POST /recommendations`, `GET /recommendations`, `GET /recommendations/:id`, `GET /recommendation-rules`, `PUT/DELETE /recommendation-rules/:code/override`.
 
+**Análisis:** `GET /cashflow/projection?days=1..365`, `GET /dashboard/summary?month=YYYY-MM`.
+
 **Admin:** `PATCH /admin/recommendation-rules/:code`, `POST /admin/maintenance/run`.
 
 (*) `@Idempotent`: acepta `Idempotency-Key`.
@@ -6995,6 +7288,7 @@ Login: {email, password, clientType?: WEB|NATIVE}
 Account: {name, type?, isSpendable?, isDefault?, openingBalance?, openingDate?}
 Transfer: {fromAccountId, toAccountId, amount, occurredOn, description?}
 Adjustment: {cashAccountId, amount≠0, occurredOn, description, reason}   // reason obligatorio
+Category: {name(≤60), kind: EXPENSE|INCOME|BOTH, parentId?, icon?}
 IncomeSource: {name, cashAccountId, categoryId?, payer?, amountType?, estimatedAmount,
                schedules:[{frequency, config?, nonBusinessDayRule?, useHolidays?, amountOverride?, startDate, endDate?}]}
 Schedule config: WEEKLY{dayOfWeek}|BIWEEKLY{days:[15,"LAST"]}|MONTHLY{day}|CUSTOM{everyNDays|daysOfMonth|specificDates}|ONE_TIME{date}
@@ -7026,6 +7320,7 @@ RuleOverride/AdminRule: {isEnabled?, weight?(0-100), params?}
 - MSI: sin tasa, 2–48 meses. Diferida: tasa obligatoria. Primera mensualidad en el corte de la compra; residuo en la última.
 - El "pago para no generar intereses" y el "pago mínimo" se muestran del corte; el usuario puede capturar los reales del banco.
 - Una cuenta predeterminada por usuario.
+- Categorías propias: nombre único por usuario (sin distinguir mayúsculas), un solo nivel de anidación; las del sistema son de solo lectura y no se borran si tienen hijos activos.
 - Reglas de recomendación: el usuario puede desactivar/ajustar peso; solo ADMIN ajusta las globales.
 - Reenviar verificación invalida el token anterior; respuestas 202 genéricas en recuperación.
 - Bloqueo de cuenta: 5 intentos → 423 con minutos restantes.
@@ -7050,7 +7345,7 @@ Menú: **Inicio · Operar (¿Qué tarjeta uso?, Compras, Pagos, Ingresos, Gastos
 
 ## 14.9 OpenAPI
 
-Especificación completa importable en `docs/openapi-3.1.json` (66 rutas, 46 esquemas, OpenAPI 3.1.0). Generarla con `npm run openapi:3.1`. Swagger local en `/api/docs`.
+Especificación completa importable en `docs/openapi-3.1.json` (69 rutas, 92 operaciones, 48 esquemas, OpenAPI 3.1.0). Generarla con `npm run openapi:3.1` (también actualiza la copia embebida de este documento). Swagger local en `/api/docs`.
 
 ## 14.10 Cuentas de prueba y arranque
 

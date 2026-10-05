@@ -15,8 +15,10 @@ import { CardLedgerModule } from './modules/card-ledger/card-ledger.module';
 import { CardPaymentsModule } from './modules/card-payments/card-payments.module';
 import { CardsModule } from './modules/cards/cards.module';
 import { CashAccountsModule } from './modules/cash-accounts/cash-accounts.module';
+import { CashflowModule } from './modules/cashflow/cashflow.module';
 import { CashMovementsModule } from './modules/cash-movements/cash-movements.module';
 import { CategoriesModule } from './modules/categories/categories.module';
+import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { ExpensesModule } from './modules/expenses/expenses.module';
 import { HealthModule } from './modules/health/health.module';
 import { IncomeModule } from './modules/income/income.module';
@@ -96,6 +98,8 @@ function buildLoggerOptions(config: AppConfigService): Params {
     CategoriesModule,
     CashAccountsModule,
     CashMovementsModule,
+    CashflowModule,
+    DashboardModule,
     ExpensesModule,
     IncomeModule,
     CardsModule,

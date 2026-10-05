@@ -16,6 +16,7 @@ Backend del asistente financiero **Cuentas**: ayuda a decidir qué tarjeta de cr
 | 5 | Compras y mensualidades | ✅ Implementada |
 | 6 | Motor de recomendaciones | ✅ Implementada |
 | 7 | Pruebas y preparación para producción | ✅ Implementada |
+| 8 | Soporte al frontend: proyección de flujo, resumen de dashboard y categorías propias | ✅ Implementada |
 
 El documento de la Fase 0 (reglas de negocio RN-01 a RN-26, modelo de datos completo y plan por fases) está en:
 `C:\Users\Hector.Espinoza\OneDrive - ECI\Devs\Plan\Cuentas-Fase-0-Arquitectura-y-Plan.md`
@@ -144,7 +145,8 @@ cuentas-api/
 | GET | `/api/v1/cash-movements` | Libro de movimientos con filtros |
 | POST | `/api/v1/cash-movements/adjustments` | Ajuste manual con motivo |
 | POST | `/api/v1/cash-movements/:id/reverse` | Reverso de un movimiento |
-| GET | `/api/v1/categories` | Categorías globales y propias |
+| GET/POST | `/api/v1/categories` | Categorías globales y propias |
+| PATCH/DELETE | `/api/v1/categories/:id` | Edita o elimina una categoría propia |
 | GET/POST | `/api/v1/expenses` | Gastos |
 | POST | `/api/v1/expenses/:id/reverse` | Reverso de un gasto |
 | GET/POST | `/api/v1/recurring-expenses` | Gastos recurrentes |
@@ -175,6 +177,8 @@ cuentas-api/
 | GET | `/api/v1/recommendation-rules` | Reglas del motor (globales + overrides) |
 | PUT/DELETE | `/api/v1/recommendation-rules/:code/override` | Sobrescribe o restablece una regla |
 | PATCH | `/api/v1/admin/recommendation-rules/:code` | Ajuste global (solo ADMIN) |
+| GET | `/api/v1/cashflow/projection` | Proyección de flujo de efectivo (1–365 días) |
+| GET | `/api/v1/dashboard/summary` | Resumen agregado para el dashboard |
 | GET | `/api/docs` | Documentación interactiva (Swagger UI) |
 | GET | `/api/docs-json` | Especificación OpenAPI |
 
@@ -197,6 +201,7 @@ cuentas-api/
 - [Fase 5 — Compras y mensualidades](docs/fase-05-purchases.md)
 - [Fase 6 — Motor de recomendaciones](docs/fase-06-recommendations.md)
 - [Fase 7 — Pruebas y preparación para producción](docs/fase-07-produccion.md)
+- [Fase 8 — Soporte al frontend (proyección de flujo, dashboard y categorías propias)](docs/fase-08-frontend-support.md)
 
 ## Documentación técnica completa
 

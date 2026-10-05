@@ -7,20 +7,16 @@ import { RequestMeta } from '../../common/http/request-meta';
 import { DueDateConfig } from '../../domain/cards/card-cycle';
 import { recommend } from '../../domain/recommendation/engine';
 import {
-  CardObligation,
   EngineContext,
   RecommendationResult,
   ResolvedRule,
   RuleKind,
 } from '../../domain/recommendation/types';
-import { addDays, buildLocalDate, compareLocalDates } from '../../domain/shared/local-date';
+import { addDays } from '../../domain/shared/local-date';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
-import { StatementsService } from '../cards/statements.service';
-import { RecurringExpensesService } from '../expenses/recurring-expenses.service';
+import { CashflowContextService } from '../cashflow/cashflow-context.service';
 import { HolidayCalendarService } from '../holidays/holiday-calendar.service';
-import { IncomeService } from '../income/income.service';
-import { FinancialDatePolicy } from '../ledger/financial-date.policy';
 import {
   AdminUpdateRuleDto,
   CreateRecommendationDto,
@@ -44,10 +40,7 @@ export class RecommendationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
-    private readonly datePolicy: FinancialDatePolicy,
-    private readonly incomeService: IncomeService,
-    private readonly recurringExpenses: RecurringExpensesService,
-    private readonly statementsService: StatementsService,
+    private readonly cashflowContext: CashflowContextService,
     private readonly holidays: HolidayCalendarService,
   ) {}
 
@@ -61,65 +54,10 @@ export class RecommendationsService {
       update: {},
       create: { userId },
     });
-    const today = await this.datePolicy.today(userId);
     const horizonDays = this.horizonFor(settings.projectionMinDays, dto);
-
-    const [accounts, cards, incomeUpcoming, expenseUpcoming, rules] = await Promise.all([
-      this.prisma.cashAccount.findMany({
-        where: { userId, deletedAt: null, status: 'ACTIVE' },
-      }),
-      this.prisma.creditCard.findMany({ where: { userId, deletedAt: null, status: 'ACTIVE' } }),
-      this.incomeService.upcoming(userId, { days: horizonDays, limit: 100 }),
-      this.recurringExpenses.upcoming(userId, { days: horizonDays, limit: 100 }),
-      this.resolveRules(userId),
-    ]);
-
-    const obligations: CardObligation[] = [];
-
-    for (const card of cards) {
-      await this.statementsService.sync(userId, card.id);
-
-      const statements = await this.prisma.cardStatement.findMany({
-        where: { userId, creditCardId: card.id, status: { not: 'PAID' } },
-      });
-      for (const statement of statements) {
-        const effective = statement.noInterestPaymentReported ?? statement.noInterestPaymentCalc;
-        const outstanding = effective - statement.paidAmount;
-        if (outstanding > 0) {
-          obligations.push({
-            date: statement.dueDate,
-            amount: outstanding,
-            cardId: card.id,
-            description: `Pago ${card.alias} (corte ${statement.cutDate})`,
-          });
-        }
-      }
-
-      const scheduledInstallments = await this.prisma.installment.findMany({
-        where: { userId, plan: { creditCardId: card.id }, status: 'SCHEDULED' },
-      });
-      for (const installment of scheduledInstallments) {
-        const outstanding = installment.totalAmount - installment.paidAmount;
-        if (outstanding > 0) {
-          obligations.push({
-            date: installment.dueDate,
-            amount: outstanding,
-            cardId: card.id,
-            description: `Mensualidad ${card.alias}`,
-          });
-        }
-      }
-
-      // RN-24: la anualidad se proyecta como cargo futuro.
-      if (card.annualFee && card.annualFee > 0 && card.annualFeeMonth) {
-        obligations.push({
-          date: this.nextAnnualFeeDate(today, card.annualFeeMonth),
-          amount: card.annualFee,
-          cardId: card.id,
-          description: `Anualidad ${card.alias}`,
-        });
-      }
-    }
+    const base = await this.cashflowContext.buildBase(userId, horizonDays);
+    const today = base.today;
+    const rules = await this.resolveRules(userId);
 
     const holidays = await this.holidays.getHolidaySet(
       settings.holidayCalendarCode,
@@ -138,13 +76,13 @@ export class RecommendationsService {
         holidayCalendarCode: settings.holidayCalendarCode,
         holidays,
       },
-      cashAccounts: accounts.map((account) => ({
+      cashAccounts: base.accounts.map((account) => ({
         id: account.id,
         name: account.name,
         currentBalance: account.currentBalance,
         isSpendable: account.isSpendable,
       })),
-      cards: cards.map((card) => ({
+      cards: base.cards.map((card) => ({
         id: card.id,
         alias: card.alias,
         status: card.status,
@@ -160,17 +98,22 @@ export class RecommendationsService {
           rule: card.dueNonBusinessDayRule as DueDateConfig['rule'],
         },
       })),
-      expectedIncomes: incomeUpcoming.occurrences.map((occurrence) => ({
+      expectedIncomes: base.incomes.map((occurrence) => ({
         date: occurrence.expectedDate,
         amount: occurrence.expectedAmount,
         description: occurrence.incomeSourceName,
       })),
-      scheduledExpenses: expenseUpcoming.occurrences.map((occurrence) => ({
+      scheduledExpenses: base.expenses.map((occurrence) => ({
         date: occurrence.expectedDate,
         amount: occurrence.amount,
         description: occurrence.name,
       })),
-      cardObligations: obligations,
+      cardObligations: base.obligations.map((obligation) => ({
+        date: obligation.date,
+        amount: obligation.amount,
+        cardId: obligation.cardId,
+        description: obligation.description,
+      })),
       rules,
       engineVersion: ENGINE_VERSION,
     };
@@ -426,16 +369,8 @@ export class RecommendationsService {
     });
   }
 
-  /** RN-24: proxima anualidad (dia 1 del mes configurado). */
-  private nextAnnualFeeDate(today: string, month: number): string {
-    const year = Number(today.slice(0, 4));
-    const candidate = buildLocalDate(year, month, 1);
-    return compareLocalDates(candidate, today) < 0
-      ? buildLocalDate(year + 1, month, 1)
-      : candidate;
-  }
-
-  private horizonFor(projectionMinDays: number, dto: CreateRecommendationDto): number {    if (dto.type === 'REGULAR') {
+  private horizonFor(projectionMinDays: number, dto: CreateRecommendationDto): number {
+    if (dto.type === 'REGULAR') {
       return Math.max(projectionMinDays, DEFAULT_HORIZON_DAYS);
     }
 
