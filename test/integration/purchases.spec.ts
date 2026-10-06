@@ -1,7 +1,7 @@
 import { NestFastifyApplication } from '@nestjs/platform-fastify';
 import request from 'supertest';
 import { cutDateForPurchase } from '../../src/domain/cards/card-cycle';
-import { addDays, todayInTimeZone } from '../../src/domain/shared/local-date';
+import { addDays, addMonths, compareLocalDates, todayInTimeZone } from '../../src/domain/shared/local-date';
 import {
   authHeader,
   createCard,
@@ -366,6 +366,149 @@ describe('Compras y mensualidades (integracion)', () => {
       .set(...authHeader(userB.accessToken))
       .send({ reason: 'Ajena' })
       .expect(404);
+  });
+
+  it('registra una compra MSI ya iniciada al corriente desde su primer corte', async () => {
+    const user = await createVerifiedUser(app, 'purchase-msi-ongoing');
+    const today = todayInTimeZone('America/Mexico_City');
+    const card = await createCard(app, user.accessToken, {
+      creditLimit: 3000000,
+      cutDay: 15,
+      dueDaysAfterCut: 20,
+    });
+    const startMonth = addMonths(today, -4).slice(0, 7);
+    const amount = 600000;
+
+    const purchase = await createPurchase(user, {
+      creditCardId: card.id,
+      description: 'Telefono ya empezado',
+      amount,
+      purchaseDate: today,
+      type: 'MSI',
+      months: 6,
+      firstStatementMonth: startMonth,
+    });
+
+    const plan = purchase.installmentPlan;
+    expect(plan.principal).toBe(amount);
+    expect(plan.firstStatementDate).toBe(`${startMonth}-15`);
+
+    const paid = plan.installments.filter((i: { status: string }) => i.status === 'PAID');
+    const pending = plan.installments.filter((i: { status: string }) => i.status === 'SCHEDULED');
+    expect(paid.length).toBeGreaterThan(0);
+    expect(pending.length).toBeGreaterThan(0);
+    expect(paid.length + pending.length).toBe(6);
+
+    for (const installment of paid) {
+      expect(installment.paidAmount).toBe(installment.totalAmount);
+      expect(installment.paidAt).toEqual(expect.any(String));
+      expect(installment.statementId).toBeNull();
+    }
+    for (const installment of pending) {
+      expect(installment.paidAmount).toBe(0);
+      expect(installment.paidAt).toBeNull();
+      expect(compareLocalDates(installment.dueDate, today)).toBeGreaterThan(0);
+    }
+
+    const pendingPrincipal = pending.reduce(
+      (sum: number, i: { principal: number }) => sum + i.principal,
+      0,
+    );
+    const pendingTotal = pending.reduce(
+      (sum: number, i: { totalAmount: number }) => sum + i.totalAmount,
+      0,
+    );
+    expect(plan.outstandingPrincipal).toBe(pendingPrincipal);
+    expect(plan.estimatedMonthlyPayment).toBe(pending[0].totalAmount);
+
+    // La tarjeta solo carga el principal pendiente.
+    const cardAfter = await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(cardAfter.body.currentBalance).toBe(pendingPrincipal);
+    expect(cardAfter.body.availableCredit).toBe(3000000 - pendingPrincipal);
+
+    // El detalle conserva el monto original y el plan al corriente.
+    const detail = await request(app.getHttpServer())
+      .get(`/api/v1/purchases/${purchase.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(detail.body.amount).toBe(amount);
+    expect(detail.body.installmentPlan.outstandingPrincipal).toBe(pendingPrincipal);
+
+    // La proyeccion solo cuenta las mensualidades vigentes.
+    const projection = await request(app.getHttpServer())
+      .get('/api/v1/cashflow/projection?days=365')
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    const obligationEvents = projection.body.points
+      .flatMap(
+        (point: { events: Array<{ type: string; amount: number }> }) => point.events,
+      )
+      .filter((event: { type: string }) =>
+        ['INSTALLMENT', 'CARD_STATEMENT'].includes(event.type),
+      );
+    const eventsTotal = obligationEvents.reduce(
+      (sum: number, event: { amount: number }) => sum + Math.abs(event.amount),
+      0,
+    );
+    expect(eventsTotal).toBe(pendingTotal);
+  });
+
+  it('rechaza un mes de inicio que dejaria el plan liquidado', async () => {
+    const user = await createVerifiedUser(app, 'purchase-msi-finished');
+    const today = todayInTimeZone('America/Mexico_City');
+    const card = await createCard(app, user.accessToken, { cutDay: 15, dueDaysAfterCut: 10 });
+
+    const response = await request(app.getHttpServer())
+      .post('/api/v1/purchases')
+      .set(...authHeader(user.accessToken))
+      .send({
+        creditCardId: card.id,
+        description: 'Vieja',
+        amount: 300000,
+        purchaseDate: today,
+        type: 'MSI',
+        months: 3,
+        firstStatementMonth: addMonths(today, -8).slice(0, 7),
+      })
+      .expect(422);
+    expect(response.body.reason).toBe('PLAN_ALREADY_PAID_OFF');
+  });
+
+  it('valida el mes de inicio en compras ya iniciadas', async () => {
+    const user = await createVerifiedUser(app, 'purchase-start-validation');
+    const today = todayInTimeZone('America/Mexico_City');
+    const card = await createCard(app, user.accessToken);
+
+    const regular = await request(app.getHttpServer())
+      .post('/api/v1/purchases')
+      .set(...authHeader(user.accessToken))
+      .send({
+        creditCardId: card.id,
+        description: 'Regular con mes',
+        amount: 10000,
+        purchaseDate: today,
+        type: 'REGULAR',
+        firstStatementMonth: addMonths(today, -1).slice(0, 7),
+      })
+      .expect(400);
+    expect(regular.body.reason).toBe('START_MONTH_REQUIRES_PLAN');
+
+    await request(app.getHttpServer())
+      .post('/api/v1/purchases')
+      .set(...authHeader(user.accessToken))
+      .send({
+        creditCardId: card.id,
+        description: 'Mes invalido',
+        amount: 10000,
+        purchaseDate: today,
+        type: 'MSI',
+        months: 6,
+        firstStatementMonth: '2026-13',
+      })
+      .expect(400);
   });
 
   it('acepta el limite de paginacion como numero en la query', async () => {

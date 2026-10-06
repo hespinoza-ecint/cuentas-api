@@ -6,6 +6,7 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
   Max,
   MaxLength,
   Min,
@@ -63,6 +64,17 @@ export class CreatePurchaseDto {
   @IsOptional()
   @IsIn(['NONE', 'UPFRONT', 'PRORATED'], { message: 'commissionMode no es valido' })
   commissionMode?: string;
+
+  /**
+   * Mes del primer corte ("YYYY-MM") para compras a MSI/diferidas ya iniciadas:
+   * las mensualidades ya vencidas quedan pagadas y la tarjeta solo suma el
+   * principal pendiente.
+   */
+  @IsOptional()
+  @Matches(/^\d{4}-(0[1-9]|1[0-2])$/, {
+    message: 'firstStatementMonth debe ser un mes YYYY-MM',
+  })
+  firstStatementMonth?: string;
 
   @IsOptional()
   @IsString({ message: 'notes debe ser texto' })

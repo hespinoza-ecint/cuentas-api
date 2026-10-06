@@ -1179,6 +1179,7 @@ erDiagram
 | | months? | int | 2–48 (obligatorio en MSI/diferida) |
 | | annualRateBps? | bps | 0–10000 (obligatorio en diferida; prohibido >0 en MSI) |
 | | commissionAmount? / commissionMode? | Money/enum | `NONE` \| `UPFRONT` \| `PRORATED` |
+| | firstStatementMonth? | mes | `YYYY-MM`; solo MSI/diferida ya iniciada: las mensualidades ya vencidas quedan pagadas y la tarjeta suma solo el principal pendiente |
 | | notes?, recommendationId? | | recommendationId debe existir y ser del usuario |
 | **ListPurchasesQueryDto** | creditCardId?, type?, status?, from?, to?, limit?, cursor? | | |
 | **CancelPurchaseDto** | reason | string | no vacío, máx 300 |
@@ -1251,6 +1252,7 @@ Los días que no existen en un mes se ajustan al último día. Las fechas se aju
 
 | Recurrente con tarjeta se confirma como compra | `paymentMethod = CREDIT_CARD` crea `Purchase` REGULAR + entrada `PURCHASE`; efectivo crea `Expense` + movimiento | `PAYMENT_METHOD_REQUIRED`, `CREDIT_CARD_REQUIRED`, `CARD_NOT_FOUND`, `CARD_INACTIVE` |
 | Una ocurrencia se confirma una sola vez | Único `(recurringExpenseId, occurrenceDate)` en Expense y Purchase | `OCCURRENCE_ALREADY_CONFIRMED` |
+| Compra a meses ya iniciada al corriente | `firstStatementMonth` fija el primer corte; las mensualidades vencidas quedan `PAID` y la tarjeta solo suma el principal pendiente | `START_MONTH_REQUIRES_PLAN`, `PLAN_ALREADY_PAID_OFF` |
 
 ## 7.2 Reglas adicionales implementadas
 
@@ -1936,7 +1938,9 @@ Errores: `422 PAYMENT_EXCEEDS_BALANCE`, `422 CARD_WITHOUT_BALANCE`, `422 CARD_IN
 ```
 
 **POST /purchases (DEFERRED_INTEREST) → 201** · Igual con `annualRateBps` obligatorio, `totalInterest > 0`, `totalIva = round(interés×16%)` y `commissionMode` opcional.
-Errores: `400 MONTHS_REQUIRED`, `400 MSI_WITH_RATE`, `400 RATE_REQUIRED`, `400 RECOMMENDATION_NOT_FOUND`, `422 CARD_INACTIVE`, `400 CATEGORY_KIND_MISMATCH`.
+
+**POST /purchases (MSI ya iniciada) → 201** · `"firstStatementMonth": "2026-05"` fija el primer corte en ese mes: las mensualidades ya vencidas se crean `PAID` (sin estado de cuenta) y la tarjeta solo carga el principal pendiente; `estimatedMonthlyPayment` pasa a ser la primera mensualidad vigente y la proyección únicamente cuenta las pendientes. El `amount` sigue siendo el monto original y `purchase.amount` no cambia.
+Errores: `400 MONTHS_REQUIRED`, `400 MSI_WITH_RATE`, `400 RATE_REQUIRED`, `400 START_MONTH_REQUIRES_PLAN`, `422 PLAN_ALREADY_PAID_OFF`, `400 RECOMMENDATION_NOT_FOUND`, `422 CARD_INACTIVE`, `400 CATEGORY_KIND_MISMATCH`.
 
 **POST /purchases/:id/cancel → 201** · `{ "reason": "Devolución completa" }` → compra `CANCELLED`, plan `CANCELLED`, mensualidades `CANCELLED`, entrada `REFUND` que restaura el crédito. Errores: `409 PURCHASE_NOT_ACTIVE`, `422 PLAN_HAS_PAYMENTS`.
 
@@ -6662,6 +6666,10 @@ Tipos de evento: `INCOME`, `RECURRING_EXPENSE`, `CARD_STATEMENT`, `INSTALLMENT`,
               "UPFRONT",
               "PRORATED"
             ]
+          },
+          "firstStatementMonth": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
           },
           "notes": {
             "type": "string",

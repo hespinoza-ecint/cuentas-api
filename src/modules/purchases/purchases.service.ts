@@ -9,6 +9,7 @@ import { RequestMeta } from '../../common/http/request-meta';
 import { NonBusinessDayRule } from '../../domain/calendar/business-calendar';
 import {
   DueDateConfig,
+  cutDateForMonth,
   cutDateForPurchase,
   cutDatesFrom,
   dueDateFor,
@@ -17,7 +18,7 @@ import {
   buildFrenchSchedule,
   buildMsiSchedule,
 } from '../../domain/installments/amortization';
-import { addDays } from '../../domain/shared/local-date';
+import { addDays, compareLocalDates } from '../../domain/shared/local-date';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { CardLedgerService } from '../card-ledger/card-ledger.service';
@@ -130,6 +131,12 @@ export class PurchasesService {
       }
     }
 
+    if (dto.firstStatementMonth && dto.type === 'REGULAR') {
+      throw new BadRequestError('El mes del primer corte solo aplica a compras a meses o diferidas.', {
+        reason: 'START_MONTH_REQUIRES_PLAN',
+      });
+    }
+
     if (dto.type === 'REGULAR') {
       const purchase = await this.prisma.$transaction(async (tx) => {
         const created = await this.purchases.create(
@@ -222,7 +229,13 @@ export class PurchasesService {
             commissionMode: dto.commissionMode as 'NONE' | 'UPFRONT' | 'PRORATED' | undefined,
           });
 
-    const firstCut = cutDateForPurchase(card.cutDay, dto.purchaseDate, card.sameDayCutIncluded);
+    const firstCut = dto.firstStatementMonth
+      ? cutDateForMonth(
+          card.cutDay,
+          Number(dto.firstStatementMonth.slice(0, 4)),
+          Number(dto.firstStatementMonth.slice(5, 7)),
+        )
+      : cutDateForPurchase(card.cutDay, dto.purchaseDate, card.sameDayCutIncluded);
     const cuts = cutDatesFrom(card.cutDay, firstCut, dto.months);
 
     const settings = await this.prisma.userSettings.upsert({
@@ -243,6 +256,28 @@ export class PurchasesService {
       rule: card.dueNonBusinessDayRule as NonBusinessDayRule,
     };
     const dueDates = cuts.map((cut) => dueDateFor(cut, dueConfig, holidays));
+
+    // "Al corriente": al indicar el mes del primer corte, las mensualidades ya
+    // vencidas se registran como pagadas y la tarjeta solo suma lo pendiente.
+    const today = await this.datePolicy.today(userId);
+    const paidCount = dto.firstStatementMonth
+      ? dueDates.filter((dueDate) => compareLocalDates(dueDate, today) <= 0).length
+      : 0;
+    if (paidCount >= (dto.months as number)) {
+      throw new UnprocessableEntityError(
+        'Con ese mes de inicio el plan ya estaria liquidado; revisa el mes o los meses.',
+        { reason: 'PLAN_ALREADY_PAID_OFF' },
+      );
+    }
+    const pendingRows = schedule.rows.slice(paidCount);
+    const outstandingPrincipal = pendingRows.reduce((total, row) => total + row.principal, 0);
+    const firstPendingCut = cuts[paidCount];
+    const ledgerDate = dto.firstStatementMonth
+      ? compareLocalDates(firstPendingCut, today) <= 0
+        ? firstPendingCut
+        : today
+      : dto.purchaseDate;
+    const ledgerAmount = dto.firstStatementMonth ? outstandingPrincipal : dto.amount;
 
     const purchaseId = await this.prisma.$transaction(async (tx) => {
       const created = await this.purchases.create(
@@ -275,30 +310,34 @@ export class PurchasesService {
           commissionMode: dto.commissionMode ?? 'NONE',
           amortizationMethod: 'FRENCH',
           firstStatementDate: firstCut,
-          estimatedMonthlyPayment: schedule.estimatedMonthlyPayment,
+          estimatedMonthlyPayment: pendingRows[0].totalAmount,
           totalInterest: schedule.totalInterest,
           totalIva: schedule.totalIva,
-          outstandingPrincipal: dto.amount,
+          outstandingPrincipal: ledgerAmount,
           status: 'ACTIVE',
         },
         tx,
       );
 
       await this.purchases.createInstallments(
-        schedule.rows.map((row, index) => ({
-          userId,
-          planId: plan.id,
-          number: row.number,
-          statementCutDate: cuts[index],
-          dueDate: dueDates[index],
-          principal: row.principal,
-          interest: row.interest,
-          iva: row.iva,
-          fee: row.fee,
-          totalAmount: row.totalAmount,
-          paidAmount: 0,
-          status: 'SCHEDULED',
-        })),
+        schedule.rows.map((row, index) => {
+          const isPaid = index < paidCount;
+          return {
+            userId,
+            planId: plan.id,
+            number: row.number,
+            statementCutDate: cuts[index],
+            dueDate: dueDates[index],
+            principal: row.principal,
+            interest: row.interest,
+            iva: row.iva,
+            fee: row.fee,
+            totalAmount: row.totalAmount,
+            paidAmount: isPaid ? row.totalAmount : 0,
+            status: isPaid ? 'PAID' : 'SCHEDULED',
+            paidAt: isPaid ? new Date(`${dueDates[index]}T12:00:00.000Z`) : null,
+          };
+        }),
         tx,
       );
 
@@ -308,8 +347,8 @@ export class PurchasesService {
           userId,
           creditCardId: card.id,
           type: 'PURCHASE',
-          amount: dto.amount,
-          occurredOn: dto.purchaseDate,
+          amount: ledgerAmount,
+          occurredOn: ledgerDate,
           description: dto.description,
           sourceType: 'InstallmentPlan',
           sourceId: created.id,
@@ -332,7 +371,14 @@ export class PurchasesService {
             months: dto.months,
             annualRateBps,
             firstStatementDate: firstCut,
-            estimatedMonthlyPayment: schedule.estimatedMonthlyPayment,
+            estimatedMonthlyPayment: pendingRows[0].totalAmount,
+            ...(dto.firstStatementMonth
+              ? {
+                  firstStatementMonth: dto.firstStatementMonth,
+                  paidInstallments: paidCount,
+                  outstandingPrincipal,
+                }
+              : {}),
           },
           ...meta,
         },
