@@ -15,7 +15,11 @@ export type ExpenseWithCategory = Prisma.ExpenseGetPayload<{
 }>;
 
 export type RecurringExpenseWithCategory = Prisma.RecurringExpenseGetPayload<{
-  include: { category: { select: { id: true; name: true } } };
+  include: {
+    category: { select: { id: true; name: true } };
+    cashAccount: { select: { id: true; name: true } };
+    creditCard: { select: { id: true; alias: true; last4: true } };
+  };
 }>;
 
 @Injectable()
@@ -80,18 +84,46 @@ export class ExpensesRepository {
     });
   }
 
+  findPurchaseByOccurrence(
+    recurringExpenseId: string,
+    occurrenceDate: string,
+  ): Promise<{ id: string } | null> {
+    return this.prisma.purchase.findFirst({
+      where: { recurringExpenseId, occurrenceDate },
+      select: { id: true },
+    });
+  }
+
+  findPurchasesByOccurrenceDates(
+    recurringExpenseId: string,
+    dates: string[],
+  ): Promise<Array<{ occurrenceDate: string | null }>> {
+    return this.prisma.purchase.findMany({
+      where: { recurringExpenseId, occurrenceDate: { in: dates } },
+      select: { occurrenceDate: true },
+    });
+  }
+
   listRecurring(userId: string, includeInactive: boolean): Promise<RecurringExpenseWithCategory[]> {
     return this.prisma.recurringExpense.findMany({
       where: { userId, deletedAt: null, ...(includeInactive ? {} : { isActive: true }) },
       orderBy: { createdAt: 'asc' },
-      include: { category: { select: { id: true, name: true } } },
+      include: {
+        category: { select: { id: true, name: true } },
+        cashAccount: { select: { id: true, name: true } },
+        creditCard: { select: { id: true, alias: true, last4: true } },
+      },
     });
   }
 
   findRecurring(userId: string, id: string): Promise<RecurringExpenseWithCategory | null> {
     return this.prisma.recurringExpense.findFirst({
       where: { id, userId, deletedAt: null },
-      include: { category: { select: { id: true, name: true } } },
+      include: {
+        category: { select: { id: true, name: true } },
+        cashAccount: { select: { id: true, name: true } },
+        creditCard: { select: { id: true, alias: true, last4: true } },
+      },
     });
   }
 

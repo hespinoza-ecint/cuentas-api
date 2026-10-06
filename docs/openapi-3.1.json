@@ -2459,7 +2459,14 @@
         },
         "responses": {
           "201": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -2469,190 +2476,6 @@
         ],
         "tags": [
           "recurring-expenses"
-        ]
-      }
-    },
-    "/api/v1/dashboard/summary": {
-      "get": {
-        "operationId": "DashboardController_summary",
-        "parameters": [
-          {
-            "name": "month",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "pattern": "^\\d{4}-(0[1-9]|1[0-2])$",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "dashboard"
-        ]
-      }
-    },
-    "/api/v1/card-payments": {
-      "get": {
-        "operationId": "CardPaymentsController_list",
-        "parameters": [
-          {
-            "name": "creditCardId",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "format": "uuid",
-              "type": "string"
-            }
-          },
-          {
-            "name": "limit",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "minimum": 1,
-              "maximum": 100,
-              "type": "number"
-            }
-          },
-          {
-            "name": "cursor",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "format": "uuid",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "card-payments"
-        ]
-      },
-      "post": {
-        "operationId": "CardPaymentsController_create",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateCardPaymentDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "card-payments"
-        ]
-      }
-    },
-    "/api/v1/card-payments/{id}": {
-      "get": {
-        "operationId": "CardPaymentsController_get",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "card-payments"
-        ]
-      }
-    },
-    "/api/v1/card-payments/{id}/reverse": {
-      "post": {
-        "operationId": "CardPaymentsController_reverse",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ReverseCardPaymentDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "card-payments"
         ]
       }
     },
@@ -2938,6 +2761,190 @@
         ],
         "tags": [
           "installment-plans"
+        ]
+      }
+    },
+    "/api/v1/dashboard/summary": {
+      "get": {
+        "operationId": "DashboardController_summary",
+        "parameters": [
+          {
+            "name": "month",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "pattern": "^\\d{4}-(0[1-9]|1[0-2])$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "dashboard"
+        ]
+      }
+    },
+    "/api/v1/card-payments": {
+      "get": {
+        "operationId": "CardPaymentsController_list",
+        "parameters": [
+          {
+            "name": "creditCardId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "card-payments"
+        ]
+      },
+      "post": {
+        "operationId": "CardPaymentsController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCardPaymentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "card-payments"
+        ]
+      }
+    },
+    "/api/v1/card-payments/{id}": {
+      "get": {
+        "operationId": "CardPaymentsController_get",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "card-payments"
+        ]
+      }
+    },
+    "/api/v1/card-payments/{id}/reverse": {
+      "post": {
+        "operationId": "CardPaymentsController_reverse",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReverseCardPaymentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "card-payments"
         ]
       }
     },
@@ -4384,7 +4391,18 @@
             "type": "string",
             "format": "uuid"
           },
+          "paymentMethod": {
+            "type": "string",
+            "enum": [
+              "CASH_ACCOUNT",
+              "CREDIT_CARD"
+            ]
+          },
           "cashAccountId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "creditCardId": {
             "type": "string",
             "format": "uuid"
           },
@@ -4395,7 +4413,6 @@
         "required": [
           "name",
           "amount",
-          "cashAccountId",
           "schedule"
         ]
       },
@@ -4423,6 +4440,17 @@
             "format": "uuid"
           },
           "cashAccountId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "paymentMethod": {
+            "type": "string",
+            "enum": [
+              "CASH_ACCOUNT",
+              "CREDIT_CARD"
+            ]
+          },
+          "creditCardId": {
             "type": "string",
             "format": "uuid"
           },
@@ -4473,49 +4501,6 @@
         },
         "required": [
           "occurrenceDate"
-        ]
-      },
-      "CreateCardPaymentDto": {
-        "type": "object",
-        "properties": {
-          "creditCardId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "cashAccountId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "amount": {
-            "type": "number",
-            "minimum": 1,
-            "maximum": 2147483647
-          },
-          "paymentDate": {
-            "type": "string"
-          },
-          "notes": {
-            "type": "string",
-            "maxLength": 300
-          }
-        },
-        "required": [
-          "creditCardId",
-          "cashAccountId",
-          "amount",
-          "paymentDate"
-        ]
-      },
-      "ReverseCardPaymentDto": {
-        "type": "object",
-        "properties": {
-          "reason": {
-            "type": "string",
-            "maxLength": 300
-          }
-        },
-        "required": [
-          "reason"
         ]
       },
       "CreatePurchaseDto": {
@@ -4632,6 +4617,49 @@
           "cashAccountId",
           "amount",
           "paymentDate"
+        ]
+      },
+      "CreateCardPaymentDto": {
+        "type": "object",
+        "properties": {
+          "creditCardId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "cashAccountId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amount": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "paymentDate": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "creditCardId",
+          "cashAccountId",
+          "amount",
+          "paymentDate"
+        ]
+      },
+      "ReverseCardPaymentDto": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "reason"
         ]
       },
       "CreateRecommendationDto": {

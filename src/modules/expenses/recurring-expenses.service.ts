@@ -21,6 +21,7 @@ import { AuditService } from '../audit/audit.service';
 import { CategoriesService } from '../categories/categories.service';
 import { HolidayCalendarService } from '../holidays/holiday-calendar.service';
 import { LedgerService } from '../ledger/ledger.service';
+import { PurchasesService } from '../purchases/purchases.service';
 import {
   ConfirmRecurringExpenseDto,
   CreateRecurringExpenseDto,
@@ -41,6 +42,15 @@ export interface RecurringOccurrence {
   daysUntil: number;
 }
 
+/** Resultado de confirmar una ocurrencia (efectivo o tarjeta). */
+export interface RecurringConfirmation {
+  expenseId?: string;
+  movementId?: string;
+  purchaseId?: string;
+}
+
+type PaymentMethod = 'CASH_ACCOUNT' | 'CREDIT_CARD';
+
 @Injectable()
 export class RecurringExpensesService {
   constructor(
@@ -51,6 +61,7 @@ export class RecurringExpensesService {
     private readonly holidays: HolidayCalendarService,
     private readonly audit: AuditService,
     private readonly clock: ClockService,
+    private readonly purchasesService: PurchasesService,
   ) {}
 
   async list(userId: string, includeInactive = false): Promise<RecurringExpenseWithCategory[]> {
@@ -75,7 +86,11 @@ export class RecurringExpensesService {
     if (dto.categoryId) {
       await this.categories.assertUsable(userId, dto.categoryId, 'EXPENSE');
     }
-    await this.assertAccount(userId, dto.cashAccountId);
+    const payment = await this.resolvePaymentTarget(userId, {
+      paymentMethod: dto.paymentMethod,
+      cashAccountId: dto.cashAccountId,
+      creditCardId: dto.creditCardId,
+    });
 
     const config = this.parseConfig(dto.schedule.frequency, dto.schedule.config, dto.schedule.startDate);
     this.assertDateRange(dto.schedule.startDate, dto.schedule.endDate);
@@ -86,8 +101,9 @@ export class RecurringExpensesService {
       amount: dto.amount,
       amountType: dto.amountType ?? 'FIXED',
       categoryId: dto.categoryId,
-      cashAccountId: dto.cashAccountId,
-      paymentMethod: 'CASH_ACCOUNT',
+      cashAccountId: payment.cashAccountId ?? null,
+      creditCardId: payment.creditCardId ?? null,
+      paymentMethod: payment.paymentMethod,
       frequency: dto.schedule.frequency,
       config: JSON.stringify(config),
       nonBusinessDayRule: dto.schedule.nonBusinessDayRule ?? 'NONE',
@@ -120,9 +136,12 @@ export class RecurringExpensesService {
     if (dto.categoryId) {
       await this.categories.assertUsable(userId, dto.categoryId, 'EXPENSE');
     }
-    if (dto.cashAccountId) {
-      await this.assertAccount(userId, dto.cashAccountId);
-    }
+    const payment = await this.resolvePaymentTarget(userId, {
+      paymentMethod: dto.paymentMethod,
+      cashAccountId: dto.cashAccountId ?? current.cashAccountId,
+      creditCardId: dto.creditCardId ?? current.creditCardId,
+      currentMethod: current.paymentMethod,
+    });
 
     const startDate = dto.startDate ?? current.startDate;
     const endDate = dto.endDate ?? current.endDate;
@@ -137,7 +156,9 @@ export class RecurringExpensesService {
       ...(dto.amount !== undefined ? { amount: dto.amount } : {}),
       ...(dto.amountType !== undefined ? { amountType: dto.amountType } : {}),
       ...(dto.categoryId !== undefined ? { categoryId: dto.categoryId } : {}),
+      paymentMethod: payment.paymentMethod,
       ...(dto.cashAccountId !== undefined ? { cashAccountId: dto.cashAccountId } : {}),
+      ...(dto.creditCardId !== undefined ? { creditCardId: dto.creditCardId } : {}),
       ...(config ? { config: JSON.stringify(config) } : {}),
       ...(dto.nonBusinessDayRule !== undefined
         ? { nonBusinessDayRule: dto.nonBusinessDayRule }
@@ -210,8 +231,13 @@ export class RecurringExpensesService {
         continue;
       }
 
-      const confirmed = await this.repository.findExpensesByOccurrenceDates(recurrence.id, dates);
-      const confirmedDates = new Set(confirmed.map((entry) => entry.occurrenceDate));
+      const [confirmedExpenses, confirmedPurchases] = await Promise.all([
+        this.repository.findExpensesByOccurrenceDates(recurrence.id, dates),
+        this.repository.findPurchasesByOccurrenceDates(recurrence.id, dates),
+      ]);
+      const confirmedDates = new Set(
+        [...confirmedExpenses, ...confirmedPurchases].map((entry) => entry.occurrenceDate),
+      );
 
       for (const expectedDate of dates) {
         if (compareLocalDates(expectedDate, horizon) > 0) {
@@ -240,16 +266,20 @@ export class RecurringExpensesService {
     return { today, timezone: settings.timezone, horizonDays: days, occurrences: occurrences.slice(0, limit) };
   }
 
-  /** Confirma una ocurrencia: crea el gasto y su movimiento en una transaccion. */
+  /** Confirma una ocurrencia: crea el gasto (efectivo) o la compra (tarjeta). */
   async confirm(
     userId: string,
     id: string,
     dto: ConfirmRecurringExpenseDto,
     meta: RequestMeta,
-  ): Promise<{ expenseId: string; movementId: string }> {
+  ): Promise<RecurringConfirmation> {
     const recurrence = await this.get(userId, id);
 
-    if (await this.repository.findExpenseByOccurrence(id, dto.occurrenceDate)) {
+    const [confirmedExpense, confirmedPurchase] = await Promise.all([
+      this.repository.findExpenseByOccurrence(id, dto.occurrenceDate),
+      this.repository.findPurchaseByOccurrence(id, dto.occurrenceDate),
+    ]);
+    if (confirmedExpense || confirmedPurchase) {
       throw new ConflictError('Esa ocurrencia ya fue confirmada.', {
         reason: 'OCCURRENCE_ALREADY_CONFIRMED',
       });
@@ -262,11 +292,22 @@ export class RecurringExpensesService {
       (compareLocalDates(dto.occurrenceDate, today) > 0 ? today : dto.occurrenceDate);
     const amount = dto.actualAmount ?? recurrence.amount;
 
+    if (recurrence.paymentMethod === 'CREDIT_CARD') {
+      return this.confirmWithCard(userId, recurrence, dto, actualDate, amount, meta);
+    }
+
+    if (!recurrence.cashAccountId) {
+      throw new UnprocessableEntityError('El recurrente no tiene una cuenta de efectivo asignada.', {
+        reason: 'CASH_ACCOUNT_REQUIRED',
+      });
+    }
+    const cashAccountId = recurrence.cashAccountId;
+
     const result = await this.prisma.$transaction(async (tx) => {
       const movement = await this.ledger.postMovement(
         {
           userId,
-          cashAccountId: recurrence.cashAccountId,
+          cashAccountId,
           type: 'EXPENSE',
           amount: -amount,
           occurredOn: actualDate,
@@ -280,7 +321,7 @@ export class RecurringExpensesService {
       const expense = await tx.expense.create({
         data: {
           userId,
-          cashAccountId: recurrence.cashAccountId,
+          cashAccountId,
           categoryId: recurrence.categoryId,
           recurringExpenseId: recurrence.id,
           cashMovementId: movement.id,
@@ -319,6 +360,120 @@ export class RecurringExpensesService {
     });
 
     return result;
+  }
+
+  /** Confirma una ocurrencia cargandola a la tarjeta como compra regular. */
+  private async confirmWithCard(
+    userId: string,
+    recurrence: RecurringExpense,
+    dto: ConfirmRecurringExpenseDto,
+    actualDate: string,
+    amount: number,
+    meta: RequestMeta,
+  ): Promise<RecurringConfirmation> {
+    if (!recurrence.creditCardId) {
+      throw new UnprocessableEntityError('El recurrente no tiene una tarjeta asignada.', {
+        reason: 'CREDIT_CARD_REQUIRED',
+      });
+    }
+
+    const purchase = await this.purchasesService.create(
+      userId,
+      {
+        creditCardId: recurrence.creditCardId,
+        ...(recurrence.categoryId ? { categoryId: recurrence.categoryId } : {}),
+        description: recurrence.name,
+        amount,
+        purchaseDate: actualDate,
+        type: 'REGULAR',
+        ...(dto.notes ? { notes: dto.notes } : {}),
+      },
+      meta,
+      { recurringExpenseId: recurrence.id, occurrenceDate: dto.occurrenceDate },
+    );
+
+    await this.audit.record({
+      action: 'recurring_expense.confirmed',
+      entityType: 'Purchase',
+      entityId: purchase.id,
+      userId,
+      actorUserId: userId,
+      changes: {
+        recurringExpenseId: recurrence.id,
+        occurrenceDate: dto.occurrenceDate,
+        actualDate,
+        amount,
+        creditCardId: recurrence.creditCardId,
+      },
+      ...meta,
+    });
+
+    return { purchaseId: purchase.id };
+  }
+
+  /** Resuelve y valida la cuenta o tarjeta con la que se paga el recurrente. */
+  private async resolvePaymentTarget(
+    userId: string,
+    input: {
+      paymentMethod?: string;
+      cashAccountId?: string | null;
+      creditCardId?: string | null;
+      currentMethod?: string;
+    },
+  ): Promise<{
+    paymentMethod: PaymentMethod;
+    cashAccountId?: string | null;
+    creditCardId?: string | null;
+  }> {
+    const method =
+      input.paymentMethod ??
+      input.currentMethod ??
+      (input.creditCardId && !input.cashAccountId
+        ? 'CREDIT_CARD'
+        : input.cashAccountId && !input.creditCardId
+          ? 'CASH_ACCOUNT'
+          : undefined);
+
+    if (!method) {
+      throw new BadRequestError(
+        'Indica el metodo de pago junto con la cuenta de efectivo o la tarjeta.',
+        { reason: 'PAYMENT_METHOD_REQUIRED' },
+      );
+    }
+
+    if (method === 'CREDIT_CARD') {
+      if (!input.creditCardId) {
+        throw new BadRequestError('Indica la tarjeta de credito.', {
+          reason: 'CREDIT_CARD_REQUIRED',
+        });
+      }
+      await this.assertCard(userId, input.creditCardId);
+    } else {
+      if (!input.cashAccountId) {
+        throw new BadRequestError('Indica la cuenta de efectivo.', {
+          reason: 'CASH_ACCOUNT_REQUIRED',
+        });
+      }
+      await this.assertAccount(userId, input.cashAccountId);
+    }
+
+    return {
+      paymentMethod: method as PaymentMethod,
+      cashAccountId: input.cashAccountId ?? null,
+      creditCardId: input.creditCardId ?? null,
+    };
+  }
+
+  private async assertCard(userId: string, creditCardId: string): Promise<void> {
+    const card = await this.prisma.creditCard.findFirst({
+      where: { id: creditCardId, userId, deletedAt: null },
+    });
+    if (!card) {
+      throw new NotFoundError('La tarjeta de credito no existe.', { reason: 'CARD_NOT_FOUND' });
+    }
+    if (card.status !== 'ACTIVE') {
+      throw new UnprocessableEntityError('La tarjeta esta inactiva.', { reason: 'CARD_INACTIVE' });
+    }
   }
 
   private parseConfig(

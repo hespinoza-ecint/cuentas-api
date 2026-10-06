@@ -44,6 +44,12 @@ export interface PaginatedPurchases {
   meta: { limit: number; nextCursor: string | null; hasMore: boolean };
 }
 
+export interface PurchaseOriginOptions {
+  /** Solo uso interno: confirma una ocurrencia de gasto recurrente. */
+  recurringExpenseId?: string;
+  occurrenceDate?: string;
+}
+
 @Injectable()
 export class PurchasesService {
   constructor(
@@ -82,7 +88,12 @@ export class PurchasesService {
   }
 
   /** RN-19 y RN-20: las compras con mensualidades se cargan completas al credito. */
-  async create(userId: string, dto: CreatePurchaseDto, meta: RequestMeta): Promise<PurchaseWithPlan> {
+  async create(
+    userId: string,
+    dto: CreatePurchaseDto,
+    meta: RequestMeta,
+    origin?: PurchaseOriginOptions,
+  ): Promise<PurchaseWithPlan> {
     const card = await this.cardsService.get(userId, dto.creditCardId);
 
     if (card.status !== 'ACTIVE') {
@@ -90,6 +101,22 @@ export class PurchasesService {
     }
     if (dto.categoryId) {
       await this.categories.assertUsable(userId, dto.categoryId, 'EXPENSE');
+    }
+
+    if (origin?.recurringExpenseId) {
+      if (dto.type !== 'REGULAR') {
+        throw new BadRequestError('Un gasto recurrente solo genera compras regulares.', {
+          reason: 'RECURRING_REQUIRES_REGULAR',
+        });
+      }
+      const recurrence = await this.prisma.recurringExpense.findFirst({
+        where: { id: origin.recurringExpenseId, userId, deletedAt: null },
+      });
+      if (!recurrence) {
+        throw new BadRequestError('El gasto recurrente indicado no existe.', {
+          reason: 'RECURRING_EXPENSE_NOT_FOUND',
+        });
+      }
     }
 
     if (dto.recommendationId) {
@@ -117,6 +144,12 @@ export class PurchasesService {
             status: 'ACTIVE',
             notes: dto.notes,
             recommendationId: dto.recommendationId,
+            ...(origin?.recurringExpenseId
+              ? {
+                  recurringExpenseId: origin.recurringExpenseId,
+                  occurrenceDate: origin.occurrenceDate,
+                }
+              : {}),
           },
           tx,
         );

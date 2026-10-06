@@ -264,7 +264,8 @@ CREATE TABLE `RecurringExpense` (
     `id` VARCHAR(191) NOT NULL,
     `userId` VARCHAR(191) NOT NULL,
     `categoryId` VARCHAR(191) NULL,
-    `cashAccountId` VARCHAR(191) NOT NULL,
+    `cashAccountId` VARCHAR(191) NULL,
+    `creditCardId` VARCHAR(191) NULL,
     `name` VARCHAR(191) NOT NULL,
     `amount` INTEGER NOT NULL,
     `amountType` VARCHAR(191) NOT NULL DEFAULT 'FIXED',
@@ -446,6 +447,7 @@ CREATE TABLE `Purchase` (
 
     INDEX `Purchase_userId_creditCardId_purchaseDate_idx`(`userId`, `creditCardId`, `purchaseDate`),
     INDEX `Purchase_userId_status_idx`(`userId`, `status`),
+    UNIQUE INDEX `Purchase_recurringExpenseId_occurrenceDate_key`(`recurringExpenseId`, `occurrenceDate`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -625,6 +627,9 @@ ALTER TABLE `RecurringExpense` ADD CONSTRAINT `RecurringExpense_userId_fkey` FOR
 
 -- AddForeignKey
 ALTER TABLE `RecurringExpense` ADD CONSTRAINT `RecurringExpense_cashAccountId_fkey` FOREIGN KEY (`cashAccountId`) REFERENCES `CashAccount`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `RecurringExpense` ADD CONSTRAINT `RecurringExpense_creditCardId_fkey` FOREIGN KEY (`creditCardId`) REFERENCES `CreditCard`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE `RecurringExpense` ADD CONSTRAINT `RecurringExpense_categoryId_fkey` FOREIGN KEY (`categoryId`) REFERENCES `Category`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;

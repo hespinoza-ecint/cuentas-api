@@ -12,6 +12,6 @@ import { PurchasesRepository } from './repositories/purchases.repository';
   imports: [AuditModule, CardsModule, CategoriesModule, HolidaysModule],
   controllers: [PurchasesController, InstallmentPlansController],
   providers: [PurchasesService, PurchasesRepository],
-  exports: [PurchasesRepository],
+  exports: [PurchasesService, PurchasesRepository],
 })
 export class PurchasesModule {}

@@ -61,8 +61,19 @@ export class CreateRecurringExpenseDto {
   @IsUUID('4', { message: 'categoryId debe ser un UUID' })
   categoryId?: string;
 
+  @IsOptional()
+  @IsIn(['CASH_ACCOUNT', 'CREDIT_CARD'], {
+    message: 'paymentMethod debe ser CASH_ACCOUNT o CREDIT_CARD',
+  })
+  paymentMethod?: string;
+
+  @IsOptional()
   @IsUUID('4', { message: 'cashAccountId debe ser un UUID' })
-  cashAccountId!: string;
+  cashAccountId?: string;
+
+  @IsOptional()
+  @IsUUID('4', { message: 'creditCardId debe ser un UUID' })
+  creditCardId?: string;
 
   @ValidateNested()
   @Type(() => RecurringScheduleDto)
@@ -94,6 +105,16 @@ export class UpdateRecurringExpenseDto {
   @IsOptional()
   @IsUUID('4', { message: 'cashAccountId debe ser un UUID' })
   cashAccountId?: string;
+
+  @IsOptional()
+  @IsIn(['CASH_ACCOUNT', 'CREDIT_CARD'], {
+    message: 'paymentMethod debe ser CASH_ACCOUNT o CREDIT_CARD',
+  })
+  paymentMethod?: string;
+
+  @IsOptional()
+  @IsUUID('4', { message: 'creditCardId debe ser un UUID' })
+  creditCardId?: string;
 
   @IsOptional()
   @IsObject({ message: 'config debe ser un objeto' })

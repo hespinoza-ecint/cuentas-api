@@ -350,7 +350,8 @@ model RecurringExpense {
   id                 String    @id @default(uuid())
   userId             String
   categoryId         String?
-  cashAccountId      String
+  cashAccountId      String?
+  creditCardId       String?
   name               String
   amount             Int
   amountType         String    @default("FIXED") // FIXED | VARIABLE
@@ -366,9 +367,10 @@ model RecurringExpense {
   updatedAt          DateTime  @updatedAt
   deletedAt          DateTime?
 
-  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  cashAccount CashAccount @relation(fields: [cashAccountId], references: [id], onDelete: Restrict)
-  category    Category?   @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cashAccount CashAccount? @relation(fields: [cashAccountId], references: [id], onDelete: Restrict)
+  creditCard  CreditCard?  @relation(fields: [creditCardId], references: [id], onDelete: Restrict)
+  category    Category?    @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   expenses    Expense[]
   purchases   Purchase[]
 
@@ -438,6 +440,7 @@ model CreditCard {
   payments   CardPayment[]
   purchases  Purchase[]
   plans      InstallmentPlan[]
+  recurringExpenses RecurringExpense[]
   recommendations RecommendationHistory[]
 
   @@unique([userId, alias])
@@ -580,6 +583,7 @@ model Purchase {
   installmentPlan  InstallmentPlan?
   recommendation   RecommendationHistory? @relation(fields: [recommendationId], references: [id], onDelete: SetNull)
 
+  @@unique([recurringExpenseId, occurrenceDate])
   @@index([userId, creditCardId, purchaseDate])
   @@index([userId, status])
 }

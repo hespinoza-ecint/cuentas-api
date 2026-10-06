@@ -17,6 +17,7 @@ Backend del asistente financiero **Cuentas**: ayuda a decidir qué tarjeta de cr
 | 6 | Motor de recomendaciones | ✅ Implementada |
 | 7 | Pruebas y preparación para producción | ✅ Implementada |
 | 8 | Soporte al frontend: proyección de flujo, resumen de dashboard y categorías propias | ✅ Implementada |
+| 9 | Gastos recurrentes pagados con tarjeta de crédito | ✅ Implementada |
 
 El documento de la Fase 0 (reglas de negocio RN-01 a RN-26, modelo de datos completo y plan por fases) está en:
 `C:\Users\Hector.Espinoza\OneDrive - ECI\Devs\Plan\Cuentas-Fase-0-Arquitectura-y-Plan.md`
@@ -209,6 +210,7 @@ cuentas-api/
 - [Fase 6 — Motor de recomendaciones](docs/fase-06-recommendations.md)
 - [Fase 7 — Pruebas y preparación para producción](docs/fase-07-produccion.md)
 - [Fase 8 — Soporte al frontend (proyección de flujo, dashboard y categorías propias)](docs/fase-08-frontend-support.md)
+- [Fase 9 — Gastos recurrentes pagados con tarjeta de crédito](docs/fase-09-recurrentes-tarjeta.md)
 
 ## Documentación técnica completa
 

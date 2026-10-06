@@ -575,16 +575,18 @@ Confirmación u omisión de una fecha estimada.
 
 ## 5.14 RecurringExpense
 
-Gasto recurrente programado.
+Gasto recurrente programado. Se paga desde una cuenta de efectivo o con una tarjeta de crédito.
 
 | Campo | Tipo | Notas |
 |---|---|---|
-| id / userId / cashAccountId | String | PK / FK User / FK CashAccount (Restrict) |
+| id / userId | String | PK / FK User |
+| cashAccountId | String? | FK → CashAccount (Restrict); obligatorio si `paymentMethod = CASH_ACCOUNT` |
+| creditCardId | String? | FK → CreditCard (Restrict); obligatorio si `paymentMethod = CREDIT_CARD` |
 | categoryId | String? | FK → Category (SetNull) |
 | name | String | |
 | amount | Int | > 0 |
 | amountType | String | `FIXED` \| `VARIABLE` |
-| paymentMethod | String | `CASH_ACCOUNT` (en uso) \| `CREDIT_CARD` (reservado) |
+| paymentMethod | String | `CASH_ACCOUNT` \| `CREDIT_CARD`; define si confirmar crea un gasto o una compra |
 | frequency / config | String / String | Igual que IncomeSchedule |
 | nonBusinessDayRule | String | default `NONE` |
 | useHolidays | Boolean | default true |
@@ -592,7 +594,7 @@ Gasto recurrente programado.
 | isActive | Boolean | default true |
 | createdAt / updatedAt / deletedAt | DateTime | |
 
-- **Índice:** `(userId, isActive)`.
+- **Índice:** `(userId, isActive)`. El listado/detalle incluye `category {id,name}`, `cashAccount {id,name}` y `creditCard {id,alias,last4}`.
 
 ## 5.15 Expense
 
@@ -730,7 +732,7 @@ Compra con tarjeta.
 | notes | String? | |
 | createdAt / updatedAt | DateTime | |
 
-- **Índices:** `(userId, creditCardId, purchaseDate)`, `(userId, status)`.
+- **Único:** `(recurringExpenseId, occurrenceDate)` (evita confirmar dos veces la misma ocurrencia de un recurrente con tarjeta); **índices:** `(userId, creditCardId, purchaseDate)`, `(userId, status)`.
 
 ## 5.22 InstallmentPlan
 
@@ -868,6 +870,7 @@ erDiagram
     CreditCard ||--o{ Purchase : "compras"
     CreditCard ||--o{ InstallmentPlan : "planes"
     CreditCard ||--o{ RecommendationHistory : "recomendada"
+    CreditCard ||--o{ RecurringExpense : "cargo programado"
 
     CardStatement ||--o{ CardLedgerEntry : "agrupa"
     CardStatement ||--o{ Installment : "factura"
@@ -1130,8 +1133,8 @@ erDiagram
 | **ReverseExpenseDto** | reason | string | no vacío, máx 300 |
 | **ListExpensesQueryDto** | cashAccountId?, categoryId?, from?, to?, limit?, cursor? | | |
 | **RecurringScheduleDto** | frequency, config?, nonBusinessDayRule?, useHolidays?, startDate, endDate? | | igual que IncomeScheduleInputDto |
-| **CreateRecurringExpenseDto** | name (≤120), amount (≥1), amountType?, categoryId?, cashAccountId, schedule | | schedule anidado obligatorio |
-| **UpdateRecurringExpenseDto** | name?, amount?, amountType?, categoryId?, cashAccountId?, config?, nonBusinessDayRule?, useHolidays?, startDate?, endDate?, isActive? | | |
+| **CreateRecurringExpenseDto** | name (≤120), amount (≥1), amountType?, categoryId?, paymentMethod?, cashAccountId?, creditCardId?, schedule | | schedule anidado obligatorio; `paymentMethod ∈ CASH_ACCOUNT \| CREDIT_CARD` y exige la cuenta o la tarjeta correspondiente |
+| **UpdateRecurringExpenseDto** | name?, amount?, amountType?, categoryId?, paymentMethod?, cashAccountId?, creditCardId?, config?, nonBusinessDayRule?, useHolidays?, startDate?, endDate?, isActive? | | cambiar de método exige el id destino |
 | **ConfirmRecurringExpenseDto** | occurrenceDate | LocalDate | |
 | | actualAmount? | Money | ≥ 1 |
 | | actualDate? | LocalDate | |
@@ -1245,6 +1248,9 @@ Los días que no existen en un mes se ajustan al último día. Las fechas se aju
 | RN-24 | Anualidad como cargo/obligación futura | Obligación `Anualidad {alias}` en recomendaciones |
 | RN-25 | Gasto = efectivo/débito; compra = tarjeta | `Expenses` vs `Purchases` |
 | RN-26 | Errores/cancelaciones se corrigen con reverso | `reverse` en movimientos/gastos/pagos; cancelación de compra con `REFUND` |
+
+| Recurrente con tarjeta se confirma como compra | `paymentMethod = CREDIT_CARD` crea `Purchase` REGULAR + entrada `PURCHASE`; efectivo crea `Expense` + movimiento | `PAYMENT_METHOD_REQUIRED`, `CREDIT_CARD_REQUIRED`, `CARD_NOT_FOUND`, `CARD_INACTIVE` |
+| Una ocurrencia se confirma una sola vez | Único `(recurringExpenseId, occurrenceDate)` en Expense y Purchase | `OCCURRENCE_ALREADY_CONFIRMED` |
 
 ## 7.2 Reglas adicionales implementadas
 
@@ -1775,20 +1781,25 @@ Errores: `409 OCCURRENCE_ALREADY_REGISTERED`, `404 INCOME_SOURCE_NOT_FOUND`, `40
 | PATCH | `/recurring-expenses/:id` | Edita (incluye `isActive`) |
 | DELETE | `/recurring-expenses/:id` | Borrado lógico |
 | GET | `/recurring-expenses/:id/upcoming` | Próximas de uno |
-| POST | `/recurring-expenses/:id/confirm` | Confirma ocurrencia → crea gasto + movimiento |
+| POST | `/recurring-expenses/:id/confirm` | Confirma ocurrencia → gasto + movimiento (efectivo) o compra + cargo (tarjeta) |
 
 **POST /recurring-expenses → 201**
 ```json
-// Request
+// Request (efectivo)
 { "name": "Renta", "amount": 1200000, "amountType": "FIXED", "categoryId": "uuid-vivienda",
-  "cashAccountId": "uuid",
+  "paymentMethod": "CASH_ACCOUNT", "cashAccountId": "uuid",
   "schedule": { "frequency": "MONTHLY", "config": { "day": 1 }, "nonBusinessDayRule": "NONE",
                 "useHolidays": true, "startDate": "2026-01-01" } }
+// Request (tarjeta)
+{ "name": "Streaming", "amount": 30000, "paymentMethod": "CREDIT_CARD", "creditCardId": "uuid-tarjeta",
+  "schedule": { "frequency": "MONTHLY", "config": { "day": 15 }, "startDate": "2026-01-01" } }
 // Response
 { "id": "uuid", "name": "Renta", "amount": 1200000, "paymentMethod": "CASH_ACCOUNT",
+  "cashAccountId": "uuid", "creditCardId": null,
   "frequency": "MONTHLY", "config": "{\"day\":1}", "startDate": "2026-01-01",
   "isActive": true, "...": "..." }
 ```
+**GET /recurring-expenses?includeInactive=true → 200** · cada elemento incluye `category {id,name}`, `cashAccount {id,name}` y `creditCard {id,alias,last4}`.
 **GET /recurring-expenses/upcoming?days=60&limit=50 → 200**
 ```json
 { "today": "2026-10-02", "timezone": "America/Mexico_City", "horizonDays": 60,
@@ -1798,9 +1809,10 @@ Errores: `409 OCCURRENCE_ALREADY_REGISTERED`, `404 INCOME_SOURCE_NOT_FOUND`, `40
 **POST /recurring-expenses/:id/confirm → 201**
 ```json
 // Request: { "occurrenceDate": "2026-10-01", "actualAmount": 1200000, "actualDate": "2026-10-01" }
-// Response: { "expenseId": "uuid", "movementId": "uuid" }
+// Response efectivo: { "expenseId": "uuid", "movementId": "uuid" }
+// Response tarjeta:  { "purchaseId": "uuid" }
 ```
-Errores: `409 OCCURRENCE_ALREADY_CONFIRMED`.
+Errores: `409 OCCURRENCE_ALREADY_CONFIRMED`, `400 PAYMENT_METHOD_REQUIRED`, `400 CREDIT_CARD_REQUIRED`, `404 CARD_NOT_FOUND`, `422 CARD_INACTIVE`.
 
 ## 9.10 Tarjetas de crédito
 
@@ -4553,7 +4565,14 @@ Tipos de evento: `INCOME`, `RECURRING_EXPENSE`, `CARD_STATEMENT`, `INSTALLMENT`,
         },
         "responses": {
           "201": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -4563,190 +4582,6 @@ Tipos de evento: `INCOME`, `RECURRING_EXPENSE`, `CARD_STATEMENT`, `INSTALLMENT`,
         ],
         "tags": [
           "recurring-expenses"
-        ]
-      }
-    },
-    "/api/v1/dashboard/summary": {
-      "get": {
-        "operationId": "DashboardController_summary",
-        "parameters": [
-          {
-            "name": "month",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "pattern": "^\\d{4}-(0[1-9]|1[0-2])$",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "dashboard"
-        ]
-      }
-    },
-    "/api/v1/card-payments": {
-      "get": {
-        "operationId": "CardPaymentsController_list",
-        "parameters": [
-          {
-            "name": "creditCardId",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "format": "uuid",
-              "type": "string"
-            }
-          },
-          {
-            "name": "limit",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "minimum": 1,
-              "maximum": 100,
-              "type": "number"
-            }
-          },
-          {
-            "name": "cursor",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "format": "uuid",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "card-payments"
-        ]
-      },
-      "post": {
-        "operationId": "CardPaymentsController_create",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateCardPaymentDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "card-payments"
-        ]
-      }
-    },
-    "/api/v1/card-payments/{id}": {
-      "get": {
-        "operationId": "CardPaymentsController_get",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "card-payments"
-        ]
-      }
-    },
-    "/api/v1/card-payments/{id}/reverse": {
-      "post": {
-        "operationId": "CardPaymentsController_reverse",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ReverseCardPaymentDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "access-token": []
-          }
-        ],
-        "tags": [
-          "card-payments"
         ]
       }
     },
@@ -5032,6 +4867,190 @@ Tipos de evento: `INCOME`, `RECURRING_EXPENSE`, `CARD_STATEMENT`, `INSTALLMENT`,
         ],
         "tags": [
           "installment-plans"
+        ]
+      }
+    },
+    "/api/v1/dashboard/summary": {
+      "get": {
+        "operationId": "DashboardController_summary",
+        "parameters": [
+          {
+            "name": "month",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "pattern": "^\\d{4}-(0[1-9]|1[0-2])$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "dashboard"
+        ]
+      }
+    },
+    "/api/v1/card-payments": {
+      "get": {
+        "operationId": "CardPaymentsController_list",
+        "parameters": [
+          {
+            "name": "creditCardId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "card-payments"
+        ]
+      },
+      "post": {
+        "operationId": "CardPaymentsController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCardPaymentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "card-payments"
+        ]
+      }
+    },
+    "/api/v1/card-payments/{id}": {
+      "get": {
+        "operationId": "CardPaymentsController_get",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "card-payments"
+        ]
+      }
+    },
+    "/api/v1/card-payments/{id}/reverse": {
+      "post": {
+        "operationId": "CardPaymentsController_reverse",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReverseCardPaymentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "card-payments"
         ]
       }
     },
@@ -6478,7 +6497,18 @@ Tipos de evento: `INCOME`, `RECURRING_EXPENSE`, `CARD_STATEMENT`, `INSTALLMENT`,
             "type": "string",
             "format": "uuid"
           },
+          "paymentMethod": {
+            "type": "string",
+            "enum": [
+              "CASH_ACCOUNT",
+              "CREDIT_CARD"
+            ]
+          },
           "cashAccountId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "creditCardId": {
             "type": "string",
             "format": "uuid"
           },
@@ -6489,7 +6519,6 @@ Tipos de evento: `INCOME`, `RECURRING_EXPENSE`, `CARD_STATEMENT`, `INSTALLMENT`,
         "required": [
           "name",
           "amount",
-          "cashAccountId",
           "schedule"
         ]
       },
@@ -6517,6 +6546,17 @@ Tipos de evento: `INCOME`, `RECURRING_EXPENSE`, `CARD_STATEMENT`, `INSTALLMENT`,
             "format": "uuid"
           },
           "cashAccountId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "paymentMethod": {
+            "type": "string",
+            "enum": [
+              "CASH_ACCOUNT",
+              "CREDIT_CARD"
+            ]
+          },
+          "creditCardId": {
             "type": "string",
             "format": "uuid"
           },
@@ -6567,49 +6607,6 @@ Tipos de evento: `INCOME`, `RECURRING_EXPENSE`, `CARD_STATEMENT`, `INSTALLMENT`,
         },
         "required": [
           "occurrenceDate"
-        ]
-      },
-      "CreateCardPaymentDto": {
-        "type": "object",
-        "properties": {
-          "creditCardId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "cashAccountId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "amount": {
-            "type": "number",
-            "minimum": 1,
-            "maximum": 2147483647
-          },
-          "paymentDate": {
-            "type": "string"
-          },
-          "notes": {
-            "type": "string",
-            "maxLength": 300
-          }
-        },
-        "required": [
-          "creditCardId",
-          "cashAccountId",
-          "amount",
-          "paymentDate"
-        ]
-      },
-      "ReverseCardPaymentDto": {
-        "type": "object",
-        "properties": {
-          "reason": {
-            "type": "string",
-            "maxLength": 300
-          }
-        },
-        "required": [
-          "reason"
         ]
       },
       "CreatePurchaseDto": {
@@ -6726,6 +6723,49 @@ Tipos de evento: `INCOME`, `RECURRING_EXPENSE`, `CARD_STATEMENT`, `INSTALLMENT`,
           "cashAccountId",
           "amount",
           "paymentDate"
+        ]
+      },
+      "CreateCardPaymentDto": {
+        "type": "object",
+        "properties": {
+          "creditCardId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "cashAccountId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amount": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "paymentDate": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "creditCardId",
+          "cashAccountId",
+          "amount",
+          "paymentDate"
+        ]
+      },
+      "ReverseCardPaymentDto": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "reason"
         ]
       },
       "CreateRecommendationDto": {

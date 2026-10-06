@@ -1,4 +1,5 @@
 import { NestFastifyApplication } from '@nestjs/platform-fastify';
+import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import {
   addDays,
@@ -6,7 +7,7 @@ import {
   dayOfWeek,
   todayInTimeZone,
 } from '../../src/domain/shared/local-date';
-import { authHeader, createCashAccount, createVerifiedUser } from '../helpers/api';
+import { authHeader, createCard, createCashAccount, createVerifiedUser } from '../helpers/api';
 import { createTestApp } from '../helpers/test-app';
 
 describe('Gastos recurrentes (integracion)', () => {
@@ -160,5 +161,152 @@ describe('Gastos recurrentes (integracion)', () => {
       .set(...authHeader(user.accessToken))
       .expect(200);
     expect(afterDelete.body).toHaveLength(0);
+  });
+
+  it('crea un recurrente pagado con tarjeta y confirma generando la compra', async () => {
+    const user = await createVerifiedUser(app, 'recurring-card');
+    const card = await createCard(app, user.accessToken);
+    const today = todayInTimeZone('America/Mexico_City');
+
+    const created = await request(app.getHttpServer())
+      .post('/api/v1/recurring-expenses')
+      .set(...authHeader(user.accessToken))
+      .send({
+        name: 'Streaming',
+        amount: 30000,
+        paymentMethod: 'CREDIT_CARD',
+        creditCardId: card.id,
+        schedule: {
+          frequency: 'CUSTOM',
+          config: { specificDates: [today] },
+          nonBusinessDayRule: 'NONE',
+          startDate: today,
+        },
+      })
+      .expect(201);
+
+    expect(created.body.paymentMethod).toBe('CREDIT_CARD');
+    expect(created.body.creditCardId).toBe(card.id);
+    expect(created.body.cashAccountId).toBeNull();
+
+    const confirmation = await request(app.getHttpServer())
+      .post(`/api/v1/recurring-expenses/${created.body.id}/confirm`)
+      .set(...authHeader(user.accessToken))
+      .send({ occurrenceDate: today })
+      .expect(201);
+
+    expect(confirmation.body.purchaseId).toEqual(expect.any(String));
+    expect(confirmation.body.expenseId).toBeUndefined();
+
+    // La compra queda ligada al recurrente y carga la deuda de la tarjeta.
+    const purchases = await request(app.getHttpServer())
+      .get('/api/v1/purchases')
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(purchases.body.data).toHaveLength(1);
+    expect(purchases.body.data[0]).toMatchObject({
+      id: confirmation.body.purchaseId,
+      recurringExpenseId: created.body.id,
+      type: 'REGULAR',
+      amount: 30000,
+    });
+
+    const cardAfter = await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(cardAfter.body.currentBalance).toBe(30000);
+
+    // No se crea gasto de efectivo ni queda la ocurrencia pendiente.
+    const expenses = await request(app.getHttpServer())
+      .get('/api/v1/expenses')
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(expenses.body.data).toHaveLength(0);
+
+    const upcoming = await request(app.getHttpServer())
+      .get('/api/v1/recurring-expenses/upcoming?days=60')
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(upcoming.body.occurrences).toHaveLength(0);
+
+    const duplicate = await request(app.getHttpServer())
+      .post(`/api/v1/recurring-expenses/${created.body.id}/confirm`)
+      .set(...authHeader(user.accessToken))
+      .send({ occurrenceDate: today })
+      .expect(409);
+    expect(duplicate.body.reason).toBe('OCCURRENCE_ALREADY_CONFIRMED');
+  });
+
+  it('valida el metodo de pago, la tarjeta y permite cambiar de efectivo a tarjeta', async () => {
+    const user = await createVerifiedUser(app, 'recurring-card-validation');
+    const account = await createCashAccount(app, user.accessToken);
+    const today = todayInTimeZone('America/Mexico_City');
+    const schedule = { frequency: 'CUSTOM', config: { specificDates: [today] }, startDate: today };
+
+    const missing = await request(app.getHttpServer())
+      .post('/api/v1/recurring-expenses')
+      .set(...authHeader(user.accessToken))
+      .send({ name: 'Sin destino', amount: 1000, schedule })
+      .expect(400);
+    expect(missing.body.reason).toBe('PAYMENT_METHOD_REQUIRED');
+
+    const noCard = await request(app.getHttpServer())
+      .post('/api/v1/recurring-expenses')
+      .set(...authHeader(user.accessToken))
+      .send({ name: 'Sin tarjeta', amount: 1000, paymentMethod: 'CREDIT_CARD', schedule })
+      .expect(400);
+    expect(noCard.body.reason).toBe('CREDIT_CARD_REQUIRED');
+
+    const unknownCard = await request(app.getHttpServer())
+      .post('/api/v1/recurring-expenses')
+      .set(...authHeader(user.accessToken))
+      .send({
+        name: 'Tarjeta inexistente',
+        amount: 1000,
+        paymentMethod: 'CREDIT_CARD',
+        creditCardId: randomUUID(),
+        schedule,
+      })
+      .expect(404);
+    expect(unknownCard.body.reason).toBe('CARD_NOT_FOUND');
+
+    // Cambiar de efectivo a tarjeta: la confirmacion ya no toca la cuenta.
+    const created = await request(app.getHttpServer())
+      .post('/api/v1/recurring-expenses')
+      .set(...authHeader(user.accessToken))
+      .send({ name: 'Cambia a tarjeta', amount: 15000, cashAccountId: account.id, schedule })
+      .expect(201);
+    expect(created.body.paymentMethod).toBe('CASH_ACCOUNT');
+
+    const card = await createCard(app, user.accessToken);
+    const updated = await request(app.getHttpServer())
+      .patch(`/api/v1/recurring-expenses/${created.body.id}`)
+      .set(...authHeader(user.accessToken))
+      .send({ paymentMethod: 'CREDIT_CARD', creditCardId: card.id })
+      .expect(200);
+    expect(updated.body.paymentMethod).toBe('CREDIT_CARD');
+    expect(updated.body.creditCardId).toBe(card.id);
+
+    const confirmation = await request(app.getHttpServer())
+      .post(`/api/v1/recurring-expenses/${created.body.id}/confirm`)
+      .set(...authHeader(user.accessToken))
+      .send({ occurrenceDate: today })
+      .expect(201);
+    expect(confirmation.body.purchaseId).toEqual(expect.any(String));
+
+    const accountAfter = await request(app.getHttpServer())
+      .get(`/api/v1/cash-accounts/${account.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(accountAfter.body.currentBalance).toBe(0);
+
+    // La lista incluye la tarjeta para mostrarla en la UI.
+    const list = await request(app.getHttpServer())
+      .get('/api/v1/recurring-expenses')
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(list.body[0].creditCard).toMatchObject({ id: card.id, alias: card.alias });
+    expect(list.body[0].cashAccount).toMatchObject({ id: account.id });
   });
 });
