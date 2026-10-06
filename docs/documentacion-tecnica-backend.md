@@ -750,7 +750,7 @@ Plan de mensualidades (1:1 con la compra).
 | commissionAmount / commissionMode | Int / String | `NONE` \| `UPFRONT` \| `PRORATED` |
 | amortizationMethod | String | `FRENCH` (default) \| `EQUAL` |
 | firstStatementDate | String | Corte de la primera mensualidad (RN-19) |
-| estimatedMonthlyPayment | Int | Primera mensualidad |
+| estimatedMonthlyPayment | Int | Pago mensual estimado (promedio en diferidas) |
 | totalInterest / totalIva | Int | Totales exactos |
 | outstandingPrincipal | Int | **Caché** de principal pendiente |
 | prepaymentMode | String | `REDUCE_TERM` (default) \| `REDUCE_PAYMENT` (no disponible) |
@@ -1242,7 +1242,7 @@ Los días que no existen en un mes se ajustan al último día. Las fechas se aju
 | RN-17 | Pago para no generar intereses calculado y sobrescribible | `StatementsService.sync` (`noInterestPaymentCalc`) |
 | RN-18 | MSI/diferidas ocupan el monto completo del crédito y lo liberan al pagar | Entrada `PURCHASE` por el total; pagos reducen el saldo |
 | RN-19 | Primera mensualidad en el corte de la compra; residuo en la última | `cutDateForPurchase` + `buildMsiSchedule`/`buildFrenchSchedule` |
-| RN-20 | Diferidas: amortización francesa + IVA 16% + comisión configurable | `amortization.ts` |
+| RN-20 | Diferidas: cuota fija capital+interés (francesa) e IVA 16% sobre el interés sumado al pago; comisión configurable | `amortization.ts` |
 | RN-21 | Anticipos reducen plazo por defecto | `prepay` (`REDUCE_TERM`); `REDUCE_PAYMENT` responde 422 |
 | RN-22 | Interés estimado = saldo × tasa/360 × días × 1.16 en cortes vencidos | `StatementsService.withEstimatedInterest` (`estimatedInterest`) |
 | RN-23 | Pagos: primero mensualidades exigibles, luego cargos del corte, luego revolvente | `applyPaymentAllocations` |
@@ -1937,9 +1937,9 @@ Errores: `422 PAYMENT_EXCEEDS_BALANCE`, `422 CARD_WITHOUT_BALANCE`, `422 CARD_IN
       { "number": 2, "...": "..." }, { "number": 3, "...": "33334, residuo al final" } ] } }
 ```
 
-**POST /purchases (DEFERRED_INTEREST) → 201** · Igual con `annualRateBps` obligatorio, `totalInterest > 0`, `totalIva = round(interés×16%)` y `commissionMode` opcional.
+**POST /purchases (DEFERRED_INTEREST) → 201** · Igual con `annualRateBps` obligatorio, `totalInterest > 0`, `totalIva = round(interés×16%)` y `commissionMode` opcional. La cuota fija cubre **capital + interés** (tasa anual/12 sobre saldo insoluto) y el **IVA se suma encima**, así que el pago baja mes a mes; `estimatedMonthlyPayment` es el pago promedio.
 
-**POST /purchases (MSI ya iniciada) → 201** · `"firstStatementMonth": "2026-05"` fija el primer corte en ese mes: las mensualidades ya vencidas se crean `PAID` (sin estado de cuenta) y la tarjeta solo carga el principal pendiente; `estimatedMonthlyPayment` pasa a ser la primera mensualidad vigente y la proyección únicamente cuenta las pendientes. El `amount` sigue siendo el monto original y `purchase.amount` no cambia.
+**POST /purchases (MSI ya iniciada) → 201** · `"firstStatementMonth": "2026-05"` fija el primer corte en ese mes: las mensualidades ya vencidas se crean `PAID` (sin estado de cuenta) y la tarjeta solo carga el principal pendiente; `estimatedMonthlyPayment` pasa a ser el promedio de las vigentes y la proyección únicamente cuenta las pendientes. El `amount` sigue siendo el monto original y `purchase.amount` no cambia.
 Errores: `400 MONTHS_REQUIRED`, `400 MSI_WITH_RATE`, `400 RATE_REQUIRED`, `400 START_MONTH_REQUIRES_PLAN`, `422 PLAN_ALREADY_PAID_OFF`, `400 RECOMMENDATION_NOT_FOUND`, `422 CARD_INACTIVE`, `400 CATEGORY_KIND_MISMATCH`.
 
 **POST /purchases/:id/cancel → 201** · `{ "reason": "Devolución completa" }` → compra `CANCELLED`, plan `CANCELLED`, mensualidades `CANCELLED`, entrada `REFUND` que restaura el crédito. Errores: `409 PURCHASE_NOT_ACTIVE`, `422 PLAN_HAS_PAYMENTS`.

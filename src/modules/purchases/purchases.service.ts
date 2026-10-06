@@ -271,6 +271,9 @@ export class PurchasesService {
     }
     const pendingRows = schedule.rows.slice(paidCount);
     const outstandingPrincipal = pendingRows.reduce((total, row) => total + row.principal, 0);
+    const estimatedMonthlyPayment = Math.round(
+      pendingRows.reduce((total, row) => total + row.totalAmount, 0) / pendingRows.length,
+    );
     const firstPendingCut = cuts[paidCount];
     const ledgerDate = dto.firstStatementMonth
       ? compareLocalDates(firstPendingCut, today) <= 0
@@ -310,7 +313,7 @@ export class PurchasesService {
           commissionMode: dto.commissionMode ?? 'NONE',
           amortizationMethod: 'FRENCH',
           firstStatementDate: firstCut,
-          estimatedMonthlyPayment: pendingRows[0].totalAmount,
+          estimatedMonthlyPayment,
           totalInterest: schedule.totalInterest,
           totalIva: schedule.totalIva,
           outstandingPrincipal: ledgerAmount,
@@ -371,7 +374,7 @@ export class PurchasesService {
             months: dto.months,
             annualRateBps,
             firstStatementDate: firstCut,
-            estimatedMonthlyPayment: pendingRows[0].totalAmount,
+            estimatedMonthlyPayment,
             ...(dto.firstStatementMonth
               ? {
                   firstStatementMonth: dto.firstStatementMonth,

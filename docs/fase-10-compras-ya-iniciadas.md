@@ -19,7 +19,7 @@ queda **al corriente con la fecha actual**, sin capturar meses uno por uno:
 | Mensualidad vigente | `dueDate > hoy`: `SCHEDULED`, entra al corte que corresponda y se paga con el flujo normal (o un anticipo). |
 | Saldo de la tarjeta | Entrada `PURCHASE` por el **principal pendiente** (entrada con `sourceType = InstallmentPlan`, como cualquier MSI). |
 | Fecha de la entrada | El corte de la primera mensualidad vigente (si ya ocurrió) o hoy; así el corte donde toca facturarla se materializa al consultar los estados de cuenta. |
-| `estimatedMonthlyPayment` | Primera mensualidad vigente (antes: primera del plan). |
+| `estimatedMonthlyPayment` | Pago promedio de las mensualidades vigentes (capital + interés + IVA). |
 | `amount` de la compra | Monto **original**; `installmentPlan.outstandingPrincipal` es lo pendiente. |
 | Proyección / recomendaciones | Solo las mensualidades `SCHEDULED` cuentan como obligación; las `PAID` quedan fuera. |
 
@@ -40,7 +40,7 @@ queda **al corriente con la fecha actual**, sin capturar meses uno por uno:
 
 Respuesta (fragmento): plan con `firstStatementDate: "2026-06-15"`,
 `outstandingPrincipal` igual al principal de las mensualidades vigentes,
-`estimatedMonthlyPayment` = primera vigente y `installments` con las vencidas en
+`estimatedMonthlyPayment` = promedio de las vigentes y `installments` con las vencidas en
 `PAID` y las vigentes en `SCHEDULED`.
 
 Errores:

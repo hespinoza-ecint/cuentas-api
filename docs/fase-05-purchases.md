@@ -13,7 +13,7 @@ Registrar compras con tarjeta en sus tres modalidades (regular, meses sin intere
 | Tipos | `REGULAR`, `MSI` y `DEFERRED_INTEREST`; MSI no admite tasa y la diferida la exige |
 | Efecto en el crédito | RN-18: el monto completo ocupa crédito disponible desde la compra y se libera con los pagos |
 | RN-19 | La primera mensualidad pertenece al corte que incluye la compra (respeta `sameDayCutIncluded`); el residuo de centavos va en la última |
-| RN-20 | Amortización francesa (cuota fija sobre saldo insoluto) con IVA del 16% sobre intereses; comisión `NONE`, `UPFRONT` o `PRORATED` |
+| RN-20 | Amortización francesa: la cuota fija cubre capital + interés y el IVA del 16% se suma encima (el pago baja mes a mes); `estimatedMonthlyPayment` reporta el pago promedio. Comisión `NONE`, `UPFRONT` o `PRORATED` |
 | Redondeo | Todo en centavos; la última mensualidad cierra exactamente el principal; invariante verificado: `suma(cuotas) = principal + intereses + IVA (+ comisión)` |
 | RN-17 refinado | `pago para no generar intereses` = cargos regulares del periodo + mensualidades exigibles pendientes + saldo anterior no cubierto |
 | Facturación | Al materializar un corte, sus mensualidades pasan a `BILLED` y quedan ligadas al `CardStatement` |
@@ -47,7 +47,7 @@ prisma/migrations/20261002182152_card_payment_plan_link/
 
 | Archivo | Tipo | Qué valida |
 |---|---|---|
-| `amortization.spec.ts` | Unitaria | Residuos de centavos en la última cuota, suma exacta de capital, IVA sobre intereses, comisiones UPFRONT/PRORATED, tasa cero, parámetros inválidos |
+| `amortization.spec.ts` | Unitaria | Residuos de centavos en la última cuota, suma exacta de capital, IVA sobre intereses, ejemplo del banco (23% a 24 meses) con cuota fija capital+interés, comisiones UPFRONT/PRORATED, tasa cero, parámetros inválidos |
 | `purchases.spec.ts` | Integración | Compra regular, MSI con corte correcto y mensualidad exigible, diferida con intereses e IVA, validaciones por tipo, cancelación sin/con pagos, anticipos y liquidación, aislamiento |
 
 **Total del proyecto: 31 suites, 144 pruebas en verde.** Las pruebas de la Fase 4 siguen pasando con la nueva fórmula del pago para no generar intereses.

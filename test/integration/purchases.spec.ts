@@ -419,7 +419,8 @@ describe('Compras y mensualidades (integracion)', () => {
       0,
     );
     expect(plan.outstandingPrincipal).toBe(pendingPrincipal);
-    expect(plan.estimatedMonthlyPayment).toBe(pending[0].totalAmount);
+    const pendingAverage = Math.round(pendingTotal / pending.length);
+    expect(plan.estimatedMonthlyPayment).toBe(pendingAverage);
 
     // La tarjeta solo carga el principal pendiente.
     const cardAfter = await request(app.getHttpServer())

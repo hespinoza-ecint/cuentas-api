@@ -108,6 +108,47 @@ describe('amortizacion de mensualidades (RN-19 y RN-20)', () => {
         expect(row.iva).toBe(Math.round(row.interest * 0.16));
       }
     });
+
+    it('replica el ejemplo del banco: cuota fija capital+interes e IVA encima', () => {
+      // $21,658.00 a 24 meses con 23% anual fijo (tasa mensual 1.9167%).
+      const schedule = buildFrenchSchedule({
+        principal: 2_165_800,
+        months: 24,
+        annualRateBps: 2300,
+        ivaRateBps: 1600,
+      });
+
+      expect(schedule.rows[0]).toMatchObject({
+        principal: 71919,
+        interest: 41511,
+        iva: 6642,
+        totalAmount: 120072,
+      });
+      expect(schedule.rows[1]).toMatchObject({
+        principal: 73297,
+        interest: 40133,
+        iva: 6421,
+        totalAmount: 119851,
+      });
+      expect(schedule.rows[23]).toMatchObject({
+        principal: 111300,
+        interest: 2133,
+        iva: 341,
+        totalAmount: 113774,
+      });
+
+      // La cuota fija (capital + interes) es constante: $1,134.30.
+      for (let month = 0; month < 23; month += 1) {
+        const row = schedule.rows[month];
+        expect(row.principal + row.interest).toBe(113430);
+      }
+
+      expect(schedule.totalInterest).toBe(556523);
+      expect(schedule.totalIva).toBe(89043);
+      expect(schedule.rows.reduce((sum, row) => sum + row.principal, 0)).toBe(2_165_800);
+      expect(schedule.rows.reduce((sum, row) => sum + row.totalAmount, 0)).toBe(2_811_366);
+      expect(schedule.estimatedMonthlyPayment).toBe(117140);
+    });
   });
 
   describe('outstandingPrincipalOf', () => {

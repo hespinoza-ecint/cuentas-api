@@ -70,8 +70,10 @@ export interface FrenchScheduleParams {
 }
 
 /**
- * Amortizacion francesa (cuota fija sobre saldo insoluto) con IVA sobre los
- * intereses. La ultima cuota absorbe los residuos de redondeo.
+ * Amortizacion francesa (cuota fija de capital + interes sobre saldo insoluto)
+ * con IVA sobre los intereses sumado encima: el pago mensual baja porque el IVA
+ * depende del interes de cada mes. `estimatedMonthlyPayment` reporta el pago
+ * promedio (total entre meses). La ultima cuota absorbe los residuos de redondeo.
  */
 export function buildFrenchSchedule(params: FrenchScheduleParams): ScheduleResult {
   const { principal, months, annualRateBps, ivaRateBps } = params;
@@ -90,6 +92,7 @@ export function buildFrenchSchedule(params: FrenchScheduleParams): ScheduleResul
     monthlyRate === 0
       ? principal / months
       : (principal * monthlyRate) / (1 - Math.pow(1 + monthlyRate, -months));
+  const quota = Math.round(rawPayment);
 
   const rows: ScheduleRow[] = [];
   let outstanding = principal;
@@ -106,7 +109,8 @@ export function buildFrenchSchedule(params: FrenchScheduleParams): ScheduleResul
     if (isLast) {
       principalPart = outstanding;
     } else {
-      principalPart = Math.max(Math.round(rawPayment) - interest - iva, 0);
+      // La cuota fija cubre capital + interes; el IVA se suma encima.
+      principalPart = Math.max(quota - interest, 0);
     }
 
     const totalAmount = principalPart + interest + iva;
@@ -152,7 +156,9 @@ export function buildFrenchSchedule(params: FrenchScheduleParams): ScheduleResul
     totalInterest,
     totalIva,
     totalFee: commission,
-    estimatedMonthlyPayment: rows[0].totalAmount,
+    estimatedMonthlyPayment: Math.round(
+      rows.reduce((sum, row) => sum + row.totalAmount, 0) / months,
+    ),
   };
 }
 
