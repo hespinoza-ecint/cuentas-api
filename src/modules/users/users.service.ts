@@ -7,6 +7,7 @@ import { SessionsRepository } from '../auth/repositories/sessions.repository';
 import { PasswordService } from '../auth/services/password.service';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { DeleteAccountDto } from './dto/delete-account.dto';
+import { ResetDataDto } from './dto/reset-data.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UpdateSettingsDto } from './dto/update-settings.dto';
 import {
@@ -16,6 +17,11 @@ import {
   UserSettingsResponseDto,
 } from './dto/user-response.dto';
 import { UsersRepository } from './repositories/users.repository';
+
+export interface ResetDataResult {
+  message: string;
+  deleted: Record<string, number>;
+}
 
 @Injectable()
 export class UsersService {
@@ -197,8 +203,96 @@ export class UsersService {
   }
 
   /**
-   * Exportacion completa de los datos del usuario. Las colecciones
-   * financieras se agregaran en las fases 3 a 6.
+   * Restablece los datos financieros del usuario: elimina todo lo que la app
+   * lleva por el y conserva la cuenta, la sesion y las preferencias. Solo se
+   * permite con la contrasena actual y deja un registro de auditoria con los
+   * conteos eliminados (el unico rastro que permanece).
+   */
+  async resetData(
+    userId: string,
+    dto: ResetDataDto,
+    meta: RequestMeta,
+  ): Promise<ResetDataResult> {
+    const user = await this.users.findById(userId);
+    if (!user) {
+      throw new UnauthorizedError('La cuenta ya no esta disponible.');
+    }
+
+    const validPassword = await this.passwords.verify(user.passwordHash, dto.password);
+    if (!validPassword) {
+      throw new BadRequestError('La contrasena no es correcta.', { reason: 'INVALID_PASSWORD' });
+    }
+
+    const deleted: Record<string, number> = {};
+
+    await this.prisma.$transaction(async (tx) => {
+      const wipe = async (name: string, run: () => Promise<{ count: number }>) => {
+        deleted[name] = (await run()).count;
+      };
+
+      // Orden hijos -> padres para respetar las llaves foraneas Restrict.
+      await wipe('paymentAllocations', () =>
+        tx.paymentAllocation.deleteMany({ where: { userId } }),
+      );
+      await wipe('installments', () => tx.installment.deleteMany({ where: { userId } }));
+      await wipe('cardPayments', () => tx.cardPayment.deleteMany({ where: { userId } }));
+      await wipe('installmentPlans', () => tx.installmentPlan.deleteMany({ where: { userId } }));
+      await wipe('expenses', () => tx.expense.deleteMany({ where: { userId } }));
+      await wipe('incomeTransactions', () =>
+        tx.incomeTransaction.deleteMany({ where: { userId } }),
+      );
+      await wipe('cashMovements', () => tx.cashMovement.deleteMany({ where: { userId } }));
+      await wipe('incomeSchedules', () => tx.incomeSchedule.deleteMany({ where: { userId } }));
+      await wipe('incomeSources', () => tx.incomeSource.deleteMany({ where: { userId } }));
+      await wipe('purchases', () => tx.purchase.deleteMany({ where: { userId } }));
+      await wipe('cardLedgerEntries', () =>
+        tx.cardLedgerEntry.deleteMany({ where: { userId } }),
+      );
+      await wipe('cardStatements', () => tx.cardStatement.deleteMany({ where: { userId } }));
+      await wipe('recurringExpenses', () =>
+        tx.recurringExpense.deleteMany({ where: { userId } }),
+      );
+      await wipe('creditCards', () => tx.creditCard.deleteMany({ where: { userId } }));
+      await wipe('cashAccounts', () => tx.cashAccount.deleteMany({ where: { userId } }));
+      await wipe('recommendations', () =>
+        tx.recommendationHistory.deleteMany({ where: { userId } }),
+      );
+      await wipe('ruleOverrides', () =>
+        tx.userRecommendationRuleOverride.deleteMany({ where: { userId } }),
+      );
+      await wipe('categories', () =>
+        tx.category.deleteMany({ where: { userId, isSystem: false } }),
+      );
+      await wipe('idempotencyRecords', () =>
+        tx.idempotencyRecord.deleteMany({ where: { userId } }),
+      );
+      await wipe('auditLogs', () =>
+        tx.auditLog.deleteMany({ where: { OR: [{ userId }, { actorUserId: userId }] } }),
+      );
+
+      await this.audit.record(
+        {
+          action: 'user.data.reset',
+          entityType: 'User',
+          entityId: userId,
+          userId,
+          actorUserId: userId,
+          changes: { deleted },
+          ...meta,
+        },
+        tx,
+      );
+    });
+
+    return {
+      message: 'Datos restablecidos. Tu cuenta, sesion y preferencias siguen intactas.',
+      deleted,
+    };
+  }
+
+  /**
+   * Exportacion completa de los datos del usuario: perfil, configuracion,
+   * sesiones y todas las colecciones financieras.
    */
   async exportData(userId: string): Promise<Record<string, unknown>> {
     const user = await this.users.findById(userId);
@@ -208,10 +302,51 @@ export class UsersService {
 
     const settings = await this.users.ensureSettings(userId);
     const sessions = await this.sessions.listActiveByUser(userId);
+    const orderBy = { createdAt: 'asc' } as const;
+
+    const [
+      cashAccounts,
+      cashMovements,
+      categories,
+      incomeSources,
+      incomeSchedules,
+      incomeTransactions,
+      recurringExpenses,
+      expenses,
+      creditCards,
+      cardLedgerEntries,
+      cardStatements,
+      cardPayments,
+      paymentAllocations,
+      purchases,
+      installmentPlans,
+      installments,
+      recommendationHistory,
+      ruleOverrides,
+    ] = await Promise.all([
+      this.prisma.cashAccount.findMany({ where: { userId }, orderBy }),
+      this.prisma.cashMovement.findMany({ where: { userId }, orderBy }),
+      this.prisma.category.findMany({ where: { userId }, orderBy }),
+      this.prisma.incomeSource.findMany({ where: { userId }, orderBy }),
+      this.prisma.incomeSchedule.findMany({ where: { userId }, orderBy }),
+      this.prisma.incomeTransaction.findMany({ where: { userId }, orderBy }),
+      this.prisma.recurringExpense.findMany({ where: { userId }, orderBy }),
+      this.prisma.expense.findMany({ where: { userId }, orderBy }),
+      this.prisma.creditCard.findMany({ where: { userId }, orderBy }),
+      this.prisma.cardLedgerEntry.findMany({ where: { userId }, orderBy }),
+      this.prisma.cardStatement.findMany({ where: { userId }, orderBy }),
+      this.prisma.cardPayment.findMany({ where: { userId }, orderBy }),
+      this.prisma.paymentAllocation.findMany({ where: { userId }, orderBy }),
+      this.prisma.purchase.findMany({ where: { userId }, orderBy }),
+      this.prisma.installmentPlan.findMany({ where: { userId }, orderBy }),
+      this.prisma.installment.findMany({ where: { userId }, orderBy }),
+      this.prisma.recommendationHistory.findMany({ where: { userId }, orderBy }),
+      this.prisma.userRecommendationRuleOverride.findMany({ where: { userId }, orderBy }),
+    ]);
 
     return {
       exportedAt: new Date().toISOString(),
-      schemaVersion: 1,
+      schemaVersion: 2,
       user: toUserResponse(user),
       settings: toUserSettingsResponse(settings),
       sessions: sessions.map((session) => ({
@@ -223,7 +358,26 @@ export class UsersService {
         createdAt: session.createdAt,
         lastUsedAt: session.lastUsedAt,
       })),
-      financial: {},
+      financial: {
+        cashAccounts,
+        cashMovements,
+        categories,
+        incomeSources,
+        incomeSchedules,
+        incomeTransactions,
+        recurringExpenses,
+        expenses,
+        creditCards,
+        cardLedgerEntries,
+        cardStatements,
+        cardPayments,
+        paymentAllocations,
+        purchases,
+        installmentPlans,
+        installments,
+        recommendationHistory,
+        ruleOverrides,
+      },
     };
   }
 }

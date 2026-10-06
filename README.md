@@ -19,6 +19,7 @@ Backend del asistente financiero **Cuentas**: ayuda a decidir qué tarjeta de cr
 | 8 | Soporte al frontend: proyección de flujo, resumen de dashboard y categorías propias | ✅ Implementada |
 | 9 | Gastos recurrentes pagados con tarjeta de crédito | ✅ Implementada |
 | 10 | Compras a meses ya iniciadas (mes del primer corte al corriente) | ✅ Implementada |
+| 11 | Restablecimiento de datos por usuario y exportación completa | ✅ Implementada |
 
 El documento de la Fase 0 (reglas de negocio RN-01 a RN-26, modelo de datos completo y plan por fases) está en:
 `C:\Users\Hector.Espinoza\OneDrive - ECI\Devs\Plan\Cuentas-Fase-0-Arquitectura-y-Plan.md`
@@ -146,7 +147,8 @@ cuentas-api/
 | GET/PATCH | `/api/v1/users/me/settings` | Consulta y actualiza la configuración financiera |
 | POST | `/api/v1/users/me/delete` | Solicita la eliminación (30 días de gracia) |
 | POST | `/api/v1/users/me/cancel-deletion` | Cancela la eliminación |
-| GET | `/api/v1/users/me/export` | Exporta los datos en JSON |
+| POST | `/api/v1/users/me/reset` | Restablece los datos financieros (conserva cuenta y preferencias) |
+| GET | `/api/v1/users/me/export` | Exporta los datos en JSON (colecciones financieras incluidas) |
 | GET/POST | `/api/v1/cash-accounts` | Cuentas de efectivo y saldo inicial |
 | GET/PATCH/DELETE | `/api/v1/cash-accounts/:id` | Detalle, edición y borrado |
 | POST | `/api/v1/cash-accounts/transfer` | Transferencia entre cuentas |
@@ -213,6 +215,7 @@ cuentas-api/
 - [Fase 8 — Soporte al frontend (proyección de flujo, dashboard y categorías propias)](docs/fase-08-frontend-support.md)
 - [Fase 9 — Gastos recurrentes pagados con tarjeta de crédito](docs/fase-09-recurrentes-tarjeta.md)
 - [Fase 10 — Compras a meses ya iniciadas (mes del primer corte)](docs/fase-10-compras-ya-iniciadas.md)
+- [Fase 11 — Restablecimiento de datos por usuario y exportación completa](docs/fase-11-reset-y-exportacion.md)
 
 ## Documentación técnica completa
 

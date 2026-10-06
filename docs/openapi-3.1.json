@@ -521,6 +521,42 @@
         ]
       }
     },
+    "/api/v1/users/me/reset": {
+      "post": {
+        "operationId": "UsersController_resetData",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetDataDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "users"
+        ]
+      }
+    },
     "/api/v1/users/me/export": {
       "get": {
         "operationId": "UsersController_exportData",
@@ -3652,6 +3688,18 @@
         }
       },
       "DeleteAccountDto": {
+        "type": "object",
+        "properties": {
+          "password": {
+            "type": "string",
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "password"
+        ]
+      },
+      "ResetDataDto": {
         "type": "object",
         "properties": {
           "password": {

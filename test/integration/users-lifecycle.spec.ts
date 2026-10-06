@@ -1,7 +1,9 @@
 import { NestFastifyApplication } from '@nestjs/platform-fastify';
 import request from 'supertest';
+import { todayInTimeZone } from '../../src/domain/shared/local-date';
 import {
   authHeader,
+  createCashAccount,
   createVerifiedUser,
   loginUser,
   TEST_PASSWORD,
@@ -69,17 +71,33 @@ describe('Eliminacion, cancelacion y exportacion (integracion)', () => {
       .expect(200);
   });
 
-  it('la exportacion incluye perfil, configuracion y version de esquema', async () => {
+  it('la exportacion incluye perfil, configuracion, version de esquema y colecciones financieras', async () => {
     const user = await createVerifiedUser(app, 'export');
+    const account = await createCashAccount(app, user.accessToken, { openingBalance: 500000 });
+
+    await request(app.getHttpServer())
+      .post('/api/v1/categories')
+      .set(...authHeader(user.accessToken))
+      .send({ name: 'Exportable', kind: 'EXPENSE' })
+      .expect(201);
 
     const response = await request(app.getHttpServer())
       .get('/api/v1/users/me/export')
       .set(...authHeader(user.accessToken))
       .expect(200);
 
-    expect(response.body.schemaVersion).toBe(1);
+    expect(response.body.schemaVersion).toBe(2);
     expect(response.body.user.email).toBe(user.email);
     expect(response.body.settings.maxUtilizationBps).toBe(3000);
     expect(response.body.exportedAt).toEqual(expect.any(String));
+    expect(response.body.financial.cashAccounts).toHaveLength(1);
+    expect(response.body.financial.cashAccounts[0].id).toBe(account.id);
+    expect(response.body.financial.cashMovements).toHaveLength(1);
+    expect(response.body.financial.categories).toHaveLength(1);
+    expect(response.body.financial.creditCards).toHaveLength(0);
+    expect(
+      response.body.financial.cashMovements[0].occurredOn,
+    ).toBe(todayInTimeZone('America/Mexico_City'));
+    expect(JSON.stringify(response.body)).not.toContain('passwordHash');
   });
 });

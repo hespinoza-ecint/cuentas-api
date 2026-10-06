@@ -1066,6 +1066,7 @@ erDiagram
 | | backdateLimitDays? | int | 0–365 |
 | | projectionMinDays? | int | 1–365 |
 | **DeleteAccountDto** | password | string | no vacío, máx 128 |
+| **ResetDataDto** | password | string | no vacío, máx 128 (restablece los datos financieros) |
 
 **Respuestas:** `UserResponseDto { id, email, firstName, lastName, role, status, emailVerified, createdAt, updatedAt }`; `UserSettingsResponseDto { timezone, locale, holidayCalendarCode, minCashBuffer, maxUtilizationBps, variableIncomeFactorBps, pendingIncomeGraceDays, backdateLimitDays, projectionMinDays, updatedAt }`.
 
@@ -1554,7 +1555,8 @@ Errores: `401 INVALID_REFRESH_TOKEN`, `401 REFRESH_TOKEN_REUSED` (familia revoca
 | PATCH | `/users/me/settings` | Actualiza configuración |
 | POST | `/users/me/delete` | Solicita eliminación (30 días) |
 | POST | `/users/me/cancel-deletion` | Cancela eliminación (permitido en `PENDING_DELETION`) |
-| GET | `/users/me/export` | Exporta JSON (permitido en `PENDING_DELETION`) |
+| POST | `/users/me/reset` | Restablece los datos financieros (conserva cuenta, sesión y preferencias) |
+| GET | `/users/me/export` | Exporta JSON completo (permitido en `PENDING_DELETION`) |
 
 **GET /users/me → 200**
 ```json
@@ -1576,10 +1578,28 @@ Errores: `401 INVALID_REFRESH_TOKEN`, `401 REFRESH_TOKEN_REUSED` (familia revoca
 
 **POST /users/me/delete → 200** · `{ "password": "Password1234" }` → `{ "message": "La cuenta se eliminara definitivamente en 30 dias..." }` · Errores: `400 INVALID_PASSWORD`. Revoca todas las sesiones.
 **POST /users/me/cancel-deletion → 200** · `{ "message": "La eliminacion fue cancelada..." }`
+**POST /users/me/reset → 200** · `{ "password": "Password1234" }` → borra cuentas, movimientos, ingresos, gastos, recurrentes, tarjetas, estados de cuenta, pagos, compras, mensualidades, recomendaciones, overrides, categorías propias, idempotencia y auditoría; conserva la cuenta, la sesión y las preferencias. Errores: `400 INVALID_PASSWORD`.
+```json
+{ "message": "Datos restablecidos. Tu cuenta, sesion y preferencias siguen intactas.",
+  "deleted": { "paymentAllocations": 0, "installments": 3, "cardPayments": 1,
+               "installmentPlans": 1, "expenses": 0, "incomeTransactions": 0,
+               "cashMovements": 1, "incomeSchedules": 1, "incomeSources": 1,
+               "purchases": 1, "cardLedgerEntries": 2, "cardStatements": 0,
+               "recurringExpenses": 1, "creditCards": 1, "cashAccounts": 1,
+               "recommendations": 0, "ruleOverrides": 0, "categories": 1,
+               "idempotencyRecords": 0, "auditLogs": 14 } }
+```
+Deja un registro `user.data.reset` en la auditoría con los conteos (el único rastro que permanece).
 **GET /users/me/export → 200** · `Content-Disposition: attachment; filename="cuentas-export-YYYY-MM-DD.json"`
 ```json
-{ "exportedAt": "...", "schemaVersion": 1,
-  "user": { "...": "..." }, "settings": { "...": "..." }, "sessions": [ "..." ], "financial": {} }
+{ "exportedAt": "...", "schemaVersion": 2,
+  "user": { "...": "..." }, "settings": { "...": "..." }, "sessions": [ "..." ],
+  "financial": { "cashAccounts": [], "cashMovements": [], "categories": [], "incomeSources": [],
+                 "incomeSchedules": [], "incomeTransactions": [], "recurringExpenses": [],
+                 "expenses": [], "creditCards": [], "cardLedgerEntries": [], "cardStatements": [],
+                 "cardPayments": [], "paymentAllocations": [], "purchases": [],
+                 "installmentPlans": [], "installments": [], "recommendationHistory": [],
+                 "ruleOverrides": [] } }
 ```
 
 ## 9.4 Categorías
@@ -2609,6 +2629,42 @@ Tipos de evento: `INCOME`, `RECURRING_EXPENSE`, `CARD_STATEMENT`, `INSTALLMENT`,
       "post": {
         "operationId": "UsersController_cancelDeletion",
         "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "users"
+        ]
+      }
+    },
+    "/api/v1/users/me/reset": {
+      "post": {
+        "operationId": "UsersController_resetData",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetDataDto"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "",
@@ -5773,6 +5829,18 @@ Tipos de evento: `INCOME`, `RECURRING_EXPENSE`, `CARD_STATEMENT`, `INSTALLMENT`,
           "password"
         ]
       },
+      "ResetDataDto": {
+        "type": "object",
+        "properties": {
+          "password": {
+            "type": "string",
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "password"
+        ]
+      },
       "CreateCategoryDto": {
         "type": "object",
         "properties": {
@@ -7306,7 +7374,7 @@ Holiday calendars: MX_BANKING (default) | MX_LABOR
 
 **Auth (Bearer):** `POST /auth/logout`, `POST /auth/logout-all`, `GET /auth/sessions`, `DELETE /auth/sessions/:id`.
 
-**Usuarios:** `GET /users/me`, `PATCH /users/me`, `POST /users/me/change-password`, `GET /users/me/settings`, `PATCH /users/me/settings`, `POST /users/me/delete`, `POST /users/me/cancel-deletion`, `GET /users/me/export`.
+**Usuarios:** `GET /users/me`, `PATCH /users/me`, `POST /users/me/change-password`, `GET /users/me/settings`, `PATCH /users/me/settings`, `POST /users/me/delete`, `POST /users/me/cancel-deletion`, `POST /users/me/reset`, `GET /users/me/export`.
 
 **Categorías:** `GET /categories?kind=EXPENSE|INCOME`, `POST /categories`, `PATCH/DELETE /categories/:id`.
 

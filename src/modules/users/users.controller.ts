@@ -7,10 +7,11 @@ import { CurrentUser } from '../../common/auth/current-user.decorator';
 import { requestMeta } from '../../common/http/request-meta';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { DeleteAccountDto } from './dto/delete-account.dto';
+import { ResetDataDto } from './dto/reset-data.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UpdateSettingsDto } from './dto/update-settings.dto';
 import { UserResponseDto, UserSettingsResponseDto } from './dto/user-response.dto';
-import { UsersService } from './users.service';
+import { UsersService, ResetDataResult } from './users.service';
 
 interface MessageResponse {
   message: string;
@@ -78,6 +79,16 @@ export class UsersController {
     @Req() request: FastifyRequest,
   ): Promise<MessageResponse> {
     return this.usersService.cancelDeletion(user.id, requestMeta(request));
+  }
+
+  @Post('me/reset')
+  @HttpCode(200)
+  resetData(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: ResetDataDto,
+    @Req() request: FastifyRequest,
+  ): Promise<ResetDataResult> {
+    return this.usersService.resetData(user.id, dto, requestMeta(request));
   }
 
   @Get('me/export')
