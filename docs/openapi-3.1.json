@@ -3705,6 +3705,13 @@
           "password": {
             "type": "string",
             "maxLength": 128
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "ALL",
+              "CARDS"
+            ]
           }
         },
         "required": [

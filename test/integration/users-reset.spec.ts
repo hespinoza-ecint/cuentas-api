@@ -116,6 +116,7 @@ describe('Restablecimiento de datos financieros (integracion)', () => {
       .set(...authHeader(user.accessToken))
       .send({ password: TEST_PASSWORD })
       .expect(200);
+    expect(reset.body.scope).toBe('ALL');
     expect(reset.body.message).toEqual(expect.any(String));
     expect(reset.body.deleted).toMatchObject({
       cashAccounts: 1,
@@ -166,6 +167,120 @@ describe('Restablecimiento de datos financieros (integracion)', () => {
     // Puede empezar de cero.
     await createCashAccount(app, user.accessToken, { openingBalance: 10000 });
     expect(await list(user.accessToken, '/api/v1/cash-accounts')).toHaveLength(1);
+  });
+
+  it('restablece solo las tarjetas y conserva efectivo, ingresos, gastos y recurrentes', async () => {
+    const user = await createVerifiedUser(app, 'reset-cards');
+    const today = todayInTimeZone('America/Mexico_City');
+
+    const account = await createCashAccount(app, user.accessToken, { openingBalance: 500000 });
+    const card = await createCard(app, user.accessToken, { creditLimit: 2000000 });
+
+    // Gasto de efectivo, recurrente e ingreso: no deben tocarse.
+    await request(app.getHttpServer())
+      .post('/api/v1/expenses')
+      .set(...authHeader(user.accessToken))
+      .send({
+        cashAccountId: account.id,
+        description: 'Supermercado',
+        amount: 25000,
+        expenseDate: today,
+      })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post('/api/v1/recurring-expenses')
+      .set(...authHeader(user.accessToken))
+      .send({
+        name: 'Renta',
+        amount: 100000,
+        cashAccountId: account.id,
+        schedule: { frequency: 'MONTHLY', config: { day: 1 }, startDate: today },
+      })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post('/api/v1/income/sources')
+      .set(...authHeader(user.accessToken))
+      .send({
+        name: 'Sueldo',
+        cashAccountId: account.id,
+        estimatedAmount: 1000000,
+        schedules: [
+          {
+            frequency: 'MONTHLY',
+            config: { day: 15 },
+            nonBusinessDayRule: 'NONE',
+            startDate: today,
+          },
+        ],
+      })
+      .expect(201);
+
+    // Compra MSI y pago de tarjeta (genera movimiento de efectivo).
+    await request(app.getHttpServer())
+      .post('/api/v1/purchases')
+      .set(...authHeader(user.accessToken))
+      .send({
+        creditCardId: card.id,
+        description: 'Telefono',
+        amount: 300000,
+        purchaseDate: today,
+        type: 'MSI',
+        months: 3,
+      })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post('/api/v1/card-payments')
+      .set(...authHeader(user.accessToken))
+      .send({
+        creditCardId: card.id,
+        cashAccountId: account.id,
+        amount: 50000,
+        paymentDate: today,
+      })
+      .expect(201);
+
+    const movementsBefore = await list(user.accessToken, '/api/v1/cash-movements');
+
+    const reset = await request(app.getHttpServer())
+      .post('/api/v1/users/me/reset')
+      .set(...authHeader(user.accessToken))
+      .send({ password: TEST_PASSWORD, scope: 'CARDS' })
+      .expect(200);
+
+    expect(reset.body.scope).toBe('CARDS');
+    expect(reset.body.deleted).toMatchObject({
+      creditCards: 1,
+      purchases: 1,
+      installmentPlans: 1,
+      installments: 3,
+      cardPayments: 1,
+    });
+    expect(reset.body.deleted.paymentAllocations).toBeGreaterThan(0);
+    expect(reset.body.deleted.cardLedgerEntries).toBeGreaterThanOrEqual(2);
+
+    // El dominio de tarjetas queda vacio.
+    expect(await list(user.accessToken, '/api/v1/cards')).toHaveLength(0);
+    expect(await list(user.accessToken, '/api/v1/purchases')).toHaveLength(0);
+    expect(await list(user.accessToken, '/api/v1/card-payments')).toHaveLength(0);
+
+    // Efectivo, ingresos y recurrentes intactos, incluido el movimiento del pago.
+    expect(await list(user.accessToken, '/api/v1/cash-accounts')).toHaveLength(1);
+    expect(await list(user.accessToken, '/api/v1/expenses')).toHaveLength(1);
+    expect(await list(user.accessToken, '/api/v1/recurring-expenses')).toHaveLength(1);
+    expect(await list(user.accessToken, '/api/v1/income/sources')).toHaveLength(1);
+
+    const movementsAfter = await list(user.accessToken, '/api/v1/cash-movements');
+    expect(movementsAfter).toHaveLength(movementsBefore.length);
+
+    const accountAfter = await request(app.getHttpServer())
+      .get(`/api/v1/cash-accounts/${account.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(accountAfter.body.currentBalance).toBe(500000 - 25000 - 50000);
+
+    // Y puede registrar tarjetas de nuevo.
+    await createCard(app, user.accessToken, { creditLimit: 1000000 });
+    expect(await list(user.accessToken, '/api/v1/cards')).toHaveLength(1);
   });
 
   it('deja los conteos en cero cuando el usuario no tiene datos', async () => {

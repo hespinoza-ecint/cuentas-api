@@ -1066,7 +1066,8 @@ erDiagram
 | | backdateLimitDays? | int | 0–365 |
 | | projectionMinDays? | int | 1–365 |
 | **DeleteAccountDto** | password | string | no vacío, máx 128 |
-| **ResetDataDto** | password | string | no vacío, máx 128 (restablece los datos financieros) |
+| **ResetDataDto** | password | string | no vacío, máx 128 |
+| | scope? | enum | `ALL` (default, todo) \| `CARDS` (solo tarjetas) |
 
 **Respuestas:** `UserResponseDto { id, email, firstName, lastName, role, status, emailVerified, createdAt, updatedAt }`; `UserSettingsResponseDto { timezone, locale, holidayCalendarCode, minCashBuffer, maxUtilizationBps, variableIncomeFactorBps, pendingIncomeGraceDays, backdateLimitDays, projectionMinDays, updatedAt }`.
 
@@ -1555,7 +1556,7 @@ Errores: `401 INVALID_REFRESH_TOKEN`, `401 REFRESH_TOKEN_REUSED` (familia revoca
 | PATCH | `/users/me/settings` | Actualiza configuración |
 | POST | `/users/me/delete` | Solicita eliminación (30 días) |
 | POST | `/users/me/cancel-deletion` | Cancela eliminación (permitido en `PENDING_DELETION`) |
-| POST | `/users/me/reset` | Restablece los datos financieros (conserva cuenta, sesión y preferencias) |
+| POST | `/users/me/reset` | Restablece los datos: `scope: ALL` (default) o `CARDS` (conserva cuenta, sesión y preferencias) |
 | GET | `/users/me/export` | Exporta JSON completo (permitido en `PENDING_DELETION`) |
 
 **GET /users/me → 200**
@@ -1578,18 +1579,15 @@ Errores: `401 INVALID_REFRESH_TOKEN`, `401 REFRESH_TOKEN_REUSED` (familia revoca
 
 **POST /users/me/delete → 200** · `{ "password": "Password1234" }` → `{ "message": "La cuenta se eliminara definitivamente en 30 dias..." }` · Errores: `400 INVALID_PASSWORD`. Revoca todas las sesiones.
 **POST /users/me/cancel-deletion → 200** · `{ "message": "La eliminacion fue cancelada..." }`
-**POST /users/me/reset → 200** · `{ "password": "Password1234" }` → borra cuentas, movimientos, ingresos, gastos, recurrentes, tarjetas, estados de cuenta, pagos, compras, mensualidades, recomendaciones, overrides, categorías propias, idempotencia y auditoría; conserva la cuenta, la sesión y las preferencias. Errores: `400 INVALID_PASSWORD`.
+**POST /users/me/reset → 200** · `{ "password": "Password1234", "scope": "ALL" }` → borra cuentas, movimientos, ingresos, gastos, recurrentes, tarjetas, estados de cuenta, pagos, compras, mensualidades, recomendaciones, overrides, categorías propias, idempotencia y auditoría; conserva la cuenta, la sesión y las preferencias. Con `"scope": "CARDS"` borra solo el dominio de tarjetas (tarjetas, libro, cortes, pagos, asignaciones, compras, planes y mensualidades) y **conserva** efectivo, ingresos, gastos, recurrentes, auditoría y los movimientos de efectivo de los pagos. Errores: `400 INVALID_PASSWORD`, validación de `scope`.
 ```json
-{ "message": "Datos restablecidos. Tu cuenta, sesion y preferencias siguen intactas.",
-  "deleted": { "paymentAllocations": 0, "installments": 3, "cardPayments": 1,
-               "installmentPlans": 1, "expenses": 0, "incomeTransactions": 0,
-               "cashMovements": 1, "incomeSchedules": 1, "incomeSources": 1,
-               "purchases": 1, "cardLedgerEntries": 2, "cardStatements": 0,
-               "recurringExpenses": 1, "creditCards": 1, "cashAccounts": 1,
-               "recommendations": 0, "ruleOverrides": 0, "categories": 1,
-               "idempotencyRecords": 0, "auditLogs": 14 } }
+{ "message": "Tarjetas restablecidas. Tu efectivo, ingresos, gastos y preferencias siguen intactos.",
+  "scope": "CARDS",
+  "deleted": { "paymentAllocations": 1, "installments": 3, "cardPayments": 1,
+               "installmentPlans": 1, "purchases": 1, "cardLedgerEntries": 2,
+               "cardStatements": 0, "creditCards": 1 } }
 ```
-Deja un registro `user.data.reset` en la auditoría con los conteos (el único rastro que permanece).
+Con `scope: ALL` (default) la respuesta incluye además las tablas de efectivo, ingresos, categorías, idempotencia y auditoría, y el mensaje es `"Datos restablecidos..."`. Deja un registro `user.data.reset` en la auditoría con el alcance y los conteos.
 **GET /users/me/export → 200** · `Content-Disposition: attachment; filename="cuentas-export-YYYY-MM-DD.json"`
 ```json
 { "exportedAt": "...", "schemaVersion": 2,
@@ -5835,6 +5833,13 @@ Tipos de evento: `INCOME`, `RECURRING_EXPENSE`, `CARD_STATEMENT`, `INSTALLMENT`,
           "password": {
             "type": "string",
             "maxLength": 128
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "ALL",
+              "CARDS"
+            ]
           }
         },
         "required": [

@@ -20,6 +20,7 @@ import { UsersRepository } from './repositories/users.repository';
 
 export interface ResetDataResult {
   message: string;
+  scope: 'ALL' | 'CARDS';
   deleted: Record<string, number>;
 }
 
@@ -203,10 +204,14 @@ export class UsersService {
   }
 
   /**
-   * Restablece los datos financieros del usuario: elimina todo lo que la app
-   * lleva por el y conserva la cuenta, la sesion y las preferencias. Solo se
-   * permite con la contrasena actual y deja un registro de auditoria con los
-   * conteos eliminados (el unico rastro que permanece).
+   * Restablece los datos del usuario segun el alcance:
+   * - `ALL` (default): todo lo que la app lleva por el (deja el unico rastro
+   *   de auditoria con los conteos eliminados).
+   * - `CARDS`: solo el dominio de tarjetas (tarjetas, libro, cortes, pagos,
+   *   asignaciones, compras, planes y mensualidades). El efectivo, los ingresos,
+   *   los gastos, los recurrentes y la auditoria se conservan; tambien los
+   *   movimientos de efectivo de los pagos de tarjeta.
+   * Solo se permite con la contrasena actual.
    */
   async resetData(
     userId: string,
@@ -223,6 +228,7 @@ export class UsersService {
       throw new BadRequestError('La contrasena no es correcta.', { reason: 'INVALID_PASSWORD' });
     }
 
+    const scope = dto.scope ?? 'ALL';
     const deleted: Record<string, number> = {};
 
     await this.prisma.$transaction(async (tx) => {
@@ -230,45 +236,48 @@ export class UsersService {
         deleted[name] = (await run()).count;
       };
 
-      // Orden hijos -> padres para respetar las llaves foraneas Restrict.
+      // Dominio de tarjetas (orden hijos -> padres por las FK Restrict).
       await wipe('paymentAllocations', () =>
         tx.paymentAllocation.deleteMany({ where: { userId } }),
       );
       await wipe('installments', () => tx.installment.deleteMany({ where: { userId } }));
       await wipe('cardPayments', () => tx.cardPayment.deleteMany({ where: { userId } }));
       await wipe('installmentPlans', () => tx.installmentPlan.deleteMany({ where: { userId } }));
-      await wipe('expenses', () => tx.expense.deleteMany({ where: { userId } }));
-      await wipe('incomeTransactions', () =>
-        tx.incomeTransaction.deleteMany({ where: { userId } }),
-      );
-      await wipe('cashMovements', () => tx.cashMovement.deleteMany({ where: { userId } }));
-      await wipe('incomeSchedules', () => tx.incomeSchedule.deleteMany({ where: { userId } }));
-      await wipe('incomeSources', () => tx.incomeSource.deleteMany({ where: { userId } }));
       await wipe('purchases', () => tx.purchase.deleteMany({ where: { userId } }));
       await wipe('cardLedgerEntries', () =>
         tx.cardLedgerEntry.deleteMany({ where: { userId } }),
       );
       await wipe('cardStatements', () => tx.cardStatement.deleteMany({ where: { userId } }));
-      await wipe('recurringExpenses', () =>
-        tx.recurringExpense.deleteMany({ where: { userId } }),
-      );
       await wipe('creditCards', () => tx.creditCard.deleteMany({ where: { userId } }));
-      await wipe('cashAccounts', () => tx.cashAccount.deleteMany({ where: { userId } }));
-      await wipe('recommendations', () =>
-        tx.recommendationHistory.deleteMany({ where: { userId } }),
-      );
-      await wipe('ruleOverrides', () =>
-        tx.userRecommendationRuleOverride.deleteMany({ where: { userId } }),
-      );
-      await wipe('categories', () =>
-        tx.category.deleteMany({ where: { userId, isSystem: false } }),
-      );
-      await wipe('idempotencyRecords', () =>
-        tx.idempotencyRecord.deleteMany({ where: { userId } }),
-      );
-      await wipe('auditLogs', () =>
-        tx.auditLog.deleteMany({ where: { OR: [{ userId }, { actorUserId: userId }] } }),
-      );
+
+      if (scope === 'ALL') {
+        await wipe('expenses', () => tx.expense.deleteMany({ where: { userId } }));
+        await wipe('incomeTransactions', () =>
+          tx.incomeTransaction.deleteMany({ where: { userId } }),
+        );
+        await wipe('cashMovements', () => tx.cashMovement.deleteMany({ where: { userId } }));
+        await wipe('incomeSchedules', () => tx.incomeSchedule.deleteMany({ where: { userId } }));
+        await wipe('incomeSources', () => tx.incomeSource.deleteMany({ where: { userId } }));
+        await wipe('recurringExpenses', () =>
+          tx.recurringExpense.deleteMany({ where: { userId } }),
+        );
+        await wipe('cashAccounts', () => tx.cashAccount.deleteMany({ where: { userId } }));
+        await wipe('recommendations', () =>
+          tx.recommendationHistory.deleteMany({ where: { userId } }),
+        );
+        await wipe('ruleOverrides', () =>
+          tx.userRecommendationRuleOverride.deleteMany({ where: { userId } }),
+        );
+        await wipe('categories', () =>
+          tx.category.deleteMany({ where: { userId, isSystem: false } }),
+        );
+        await wipe('idempotencyRecords', () =>
+          tx.idempotencyRecord.deleteMany({ where: { userId } }),
+        );
+        await wipe('auditLogs', () =>
+          tx.auditLog.deleteMany({ where: { OR: [{ userId }, { actorUserId: userId }] } }),
+        );
+      }
 
       await this.audit.record(
         {
@@ -277,7 +286,7 @@ export class UsersService {
           entityId: userId,
           userId,
           actorUserId: userId,
-          changes: { deleted },
+          changes: { scope, deleted },
           ...meta,
         },
         tx,
@@ -285,7 +294,11 @@ export class UsersService {
     });
 
     return {
-      message: 'Datos restablecidos. Tu cuenta, sesion y preferencias siguen intactas.',
+      message:
+        scope === 'CARDS'
+          ? 'Tarjetas restablecidas. Tu efectivo, ingresos, gastos y preferencias siguen intactos.'
+          : 'Datos restablecidos. Tu cuenta, sesion y preferencias siguen intactas.',
+      scope,
       deleted,
     };
   }

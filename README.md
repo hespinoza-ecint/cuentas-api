@@ -147,7 +147,7 @@ cuentas-api/
 | GET/PATCH | `/api/v1/users/me/settings` | Consulta y actualiza la configuración financiera |
 | POST | `/api/v1/users/me/delete` | Solicita la eliminación (30 días de gracia) |
 | POST | `/api/v1/users/me/cancel-deletion` | Cancela la eliminación |
-| POST | `/api/v1/users/me/reset` | Restablece los datos financieros (conserva cuenta y preferencias) |
+| POST | `/api/v1/users/me/reset` | Restablece los datos financieros (`scope` `ALL` o `CARDS`) conservando cuenta y preferencias |
 | GET | `/api/v1/users/me/export` | Exporta los datos en JSON (colecciones financieras incluidas) |
 | GET/POST | `/api/v1/cash-accounts` | Cuentas de efectivo y saldo inicial |
 | GET/PATCH/DELETE | `/api/v1/cash-accounts/:id` | Detalle, edición y borrado |
