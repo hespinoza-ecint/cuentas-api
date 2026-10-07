@@ -100,8 +100,9 @@ Toda la configuración vive en `.env` (ver `.env.example`). La aplicación **no 
 ## Despliegue
 
 - **Docker (recomendado):** backend y frontend como dos contenedores en el mismo
-  host, con MySQL externo; guía en
-  [docs/despliegue-docker.md](docs/despliegue-docker.md).
+  host, con MySQL externo. Si es tu primera vez, sigue la
+  [guía de inicio paso a paso](docs/guia-inicio-docker-basica.md); la referencia
+  avanzada está en [docs/despliegue-docker.md](docs/despliegue-docker.md).
   ```bash
   cp .env.production.example .env.production   # ajusta DATABASE_URL y JWT_SECRET
   docker compose build && docker compose up -d

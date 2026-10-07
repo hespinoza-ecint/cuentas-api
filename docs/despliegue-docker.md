@@ -1,5 +1,9 @@
 # Despliegue con Docker: backend + frontend (MySQL externo)
 
+> **¿Primera vez con Docker?** Empieza por la
+> [guía de inicio paso a paso](guia-inicio-docker-basica.md) (puertos
+> personalizados y contraseñas seguras). Esta página es la referencia avanzada.
+
 Escenario: dos contenedores en el **mismo host Docker** — `api` (NestJS +
 Fastify) y `web` (nginx + PWA) — conectados a un **MySQL externo**.
 
