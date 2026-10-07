@@ -1,0 +1,20 @@
+# Contexto de build del backend: se genera todo dentro de la imagen.
+node_modules
+dist
+coverage
+*.tsbuildinfo
+
+# Entorno y secretos
+.env
+.env.*
+!.env.production.example
+
+# Pruebas, reportes y documentacion (no se necesitan en la imagen)
+test
+test-results
+playwright-report
+docs
+.git
+.gitignore
+*.log
+*.md

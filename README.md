@@ -99,12 +99,19 @@ Toda la configuración vive en `.env` (ver `.env.example`). La aplicación **no 
 
 ## Despliegue
 
-- **3 máquinas (API, front y MySQL separados):** guía completa en
+- **Docker (recomendado):** backend y frontend como dos contenedores en el mismo
+  host, con MySQL externo; guía en
+  [docs/despliegue-docker.md](docs/despliegue-docker.md).
+  ```bash
+  cp .env.production.example .env.production   # ajusta DATABASE_URL y JWT_SECRET
+  docker compose build && docker compose up -d
+  docker compose --profile seed run --rm --build api-seed   # primera vez
+  ```
+- **3 máquinas (API, front y MySQL separados, sin Docker):** guía completa en
   [docs/despliegue-3-maquinas.md](docs/despliegue-3-maquinas.md) — incluye
   unidad `systemd`, creación de la base MySQL, nginx y respaldos.
-- **Docker:** `docker compose up -d --build` (la base vive en el volumen `cuentas-data`).
 - **PM2:** `npm run build && pm2 start ecosystem.config.js` (una instancia con SQLite).
-- **Variables:** copia `.env.production.example` a `.env` (ejemplo con MySQL listo).
+- **Variables:** copia `.env.production.example` a `.env.production` (Docker) o `.env` (PM2/systemd).
 - **Respaldos SQLite:** `npm run db:backup` en cron; con MySQL usa `mysqldump`.
 - **Mantenimiento:** cron diario 03:00 + `POST /api/v1/admin/maintenance/run` (ADMIN).
 - Detalle de fases previas en [docs/fase-07-produccion.md](docs/fase-07-produccion.md).
@@ -113,6 +120,8 @@ Toda la configuración vive en `.env` (ver `.env.example`). La aplicación **no 
 
 ```
 cuentas-api/
+├─ Dockerfile         Imagen del backend (etapas build/prod/seed) y compose api+web
+├─ docker-compose.yml Backend y frontend en Docker (MySQL externo)
 ├─ prisma/            Esquema, migraciones y seed
 ├─ src/
 │  ├─ config/         Validación de entorno (Zod) y acceso tipado
@@ -121,7 +130,7 @@ cuentas-api/
 │  ├─ domain/         Lógica financiera pura (fases 3 a 6)
 │  └─ modules/        Módulos HTTP (health, y los de fases siguientes)
 ├─ test/              Unitarias, integración, autorización, helpers
-└─ docs/              Documentación por fase
+└─ docs/              Documentación por fase y guías de despliegue
 ```
 
 ## Endpoints actuales

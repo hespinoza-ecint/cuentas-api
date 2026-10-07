@@ -1,5 +1,8 @@
 # Despliegue en 3 máquinas (Ubuntu Server): API · Front · MySQL
 
+> ¿Vas a usar **Docker**? Usa [despliegue-docker.md](despliegue-docker.md); esta
+> guía queda como alternativa sin Docker. Su sección 1 (MySQL) aplica igual.
+
 Guía para el escenario objetivo: **backend en una máquina Ubuntu**, **frontend
 en otra** y **MySQL en un servidor dedicado**. El navegador solo habla con el
 dominio del front; nginx reenvía `/api` al backend.

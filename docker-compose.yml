@@ -1,23 +1,77 @@
+# =============================================================================
+# Cuentas en Docker: backend (api) + frontend (web) en el mismo host.
+#
+# La base de datos es un MySQL EXTERNO: aplica prisma/mysql/init.sql una sola
+# vez en una base vacia y configura DATABASE_URL en .env.production.
+#
+# Preparacion (desde este directorio, con cuentas-api y cuentas-web hermanos):
+#   cp .env.production.example .env.production     # ajusta secretos y DATABASE_URL
+#   docker compose build
+#   docker compose up -d
+#   docker compose --profile seed run --rm api-seed  # primera vez (datos del sistema)
+#
+# El front queda en http://<host>:8080 (o el WEB_BIND definido) y hace de proxy
+# /api y /health hacia http://api:3000 dentro de la red de Docker.
+#
+# Variables opcionales (con defaults): API_BIND, WEB_BIND, API_BACKEND,
+# SERVER_NAME. Puedes definirlas en un archivo .env junto a este compose.
+# =============================================================================
 services:
   api:
-    build: .
-    container_name: cuentas-api
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cuentas-api:latest
     restart: unless-stopped
-    ports:
-      - '3000:3000'
     env_file:
       - .env.production
     environment:
-      # La base vive en el volumen persistente, fuera del contenedor.
-      DATABASE_URL: file:/data/cuentas.db
-    volumes:
-      - cuentas-data:/data
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: '3000'
+    # Publicado solo en localhost (util para depurar con curl). Sobrescribe
+    # API_BIND (por ejemplo 0.0.0.0:3000) si necesitas exponerlo a la red.
+    ports:
+      - '${API_BIND:-127.0.0.1:3000}:3000'
     healthcheck:
-      test: ['CMD', 'wget', '-q', '-O', '-', 'http://127.0.0.1:3000/health']
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 20s
 
-volumes:
-  cuentas-data:
+  web:
+    build:
+      context: ../cuentas-web
+      dockerfile: Dockerfile
+    image: cuentas-web:latest
+    restart: unless-stopped
+    environment:
+      # A donde reenvia nginx /api y /health (nombre interno del servicio api).
+      API_BACKEND: '${API_BACKEND:-http://api:3000}'
+      # server_name de nginx (default "_" para responder a cualquier Host).
+      SERVER_NAME: '${SERVER_NAME:-_}'
+    ports:
+      - '${WEB_BIND:-8080:80}'
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # Tareas puntuales contra la base (seed inicial, mysql:diff, mysql:sql, ...):
+  #   docker compose --profile seed run --rm api-seed
+  api-seed:
+    profiles: ['seed']
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: seed
+    image: cuentas-api:seed
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+    command: ['npm', 'run', 'db:seed']
