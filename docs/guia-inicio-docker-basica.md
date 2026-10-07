@@ -373,21 +373,67 @@ Checklist final:
 - [ ] HTTPS activo y acceso por dominio.
 - [ ] Respaldos programados (sección 12).
 
-## 11. Actualizar el proyecto
+## 11. Actualizar el proyecto (después de cambiar código)
+
+### Regla general
+
+1. Sube los cambios al servidor (`git pull` si usas remoto, o copia los archivos).
+2. Reconstruye la imagen del servicio que cambió.
+3. Recrea los contenedores.
 
 ```bash
-cd /opt/cuentas/cuentas-api && git pull
+cd /opt/cuentas/cuentas-api
+git pull
 cd ../cuentas-web && git pull
 cd ../cuentas-api
-docker compose build
-docker compose up -d
+docker compose build            # reconstruye api y web (usa cache: es rápido)
+docker compose up -d            # recrea solo lo que cambió
 ```
 
-Si cambió el esquema de la base (te lo dirá el repo), aplica el diff:
+Atajo en un solo paso:
 
 ```bash
+docker compose up -d --build
+```
+
+### ¿Qué hacer según el cambio?
+
+| Cambio | Qué ejecutar |
+|---|---|
+| Código del **backend** (`cuentas-api/src`, prisma, etc.) | `docker compose build api && docker compose up -d api` |
+| Código del **frontend** (`cuentas-web/src`, `public`, …) | `docker compose build web && docker compose up -d web` |
+| **`.env.production`** (variables, claves) | Sin build: `docker compose up -d --force-recreate api` |
+| **`docker-compose.yml`** (puertos, variables) | `docker compose up -d` |
+| **Esquema MySQL** (`prisma/schema.prisma`) | Build + aplicar el SQL (abajo) |
+| Datos del sistema (categorías/reglas) | `docker compose --profile seed run --rm --build api-seed` (idempotente) |
+
+### Cambios de esquema en la base
+
+El contenedor **no** migra MySQL por su cuenta:
+
+```bash
+# 1) Ver el SQL que falta (imagen con el CLI de Prisma)
 docker compose --profile seed run --rm api-seed npm run mysql:diff
-# revisa el SQL y aplícalo a MySQL
+
+# 2) Revisarlo y aplicarlo
+mysql -h TU_MYSQL -P PUERTO_MYSQL -u cuentas -p cuentas < diff.sql
+```
+
+`init.sql` solo aplica a bases **nuevas** (se regenera con `npm run mysql:sql`).
+El cliente de Prisma de la imagen se regenera solo en cada `build`.
+
+### Nota sobre la PWA en el navegador
+
+El front tiene service worker: tras actualizar, la primera visita puede mostrar
+la versión anterior. Recarga con `Ctrl+F5` una vez; el nginx del front ya sirve
+`index.html` y `sw.js` sin cache para que la nueva versión entre sola.
+
+### Verificar después de actualizar
+
+```bash
+docker compose ps                      # api healthy, web arriba
+docker compose logs api --tail 30      # "Nest application successfully started"
+curl -fsS http://127.0.0.1:8456/health # OK a través del front
 ```
 
 ## 12. Respaldos

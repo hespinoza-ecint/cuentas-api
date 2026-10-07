@@ -132,6 +132,22 @@ docker compose build
 docker compose up -d
 ```
 
+Atajo equivalente: `docker compose up -d --build`.
+
+Según el cambio:
+
+| Cambio | Comando |
+|---|---|
+| Backend | `docker compose build api && docker compose up -d api` |
+| Frontend | `docker compose build web && docker compose up -d web` |
+| `.env.production` | `docker compose up -d --force-recreate api` |
+| `docker-compose.yml` | `docker compose up -d` |
+| Ambos repos | `docker compose up -d --build` |
+
+El cliente de Prisma se regenera en cada build de `api` (la etapa de compilación
+ejecuta `mysql:sql` + `mysql:generate`) y el contenedor **no** aplica
+migraciones a MySQL.
+
 Si cambió el esquema MySQL:
 
 ```bash
