@@ -78,10 +78,14 @@ Opcionales del compose (defaults entre paréntesis; se cambian en un archivo
 
 | Variable | Default | Para qué |
 |---|---|---|
-| `WEB_BIND` | `8080:80` | Puerto público del front (`80:80` si no hay proxy delante) |
-| `API_BIND` | `127.0.0.1:3000` | Publicación del API (solo depuración) |
+| `WEB_BIND` | `8080` | `<IP>:<puerto>` publicado del front (`80` si no hay proxy delante) |
+| `API_BIND` | `127.0.0.1:3000` | `<IP>:<puerto>` publicado del API (solo depuración) |
 | `API_BACKEND` | `http://api:3000` | Destino del proxy nginx del front |
 | `SERVER_NAME` | `_` | `server_name` de nginx (tu dominio) |
+
+El compose agrega el puerto interno: `WEB_BIND=0.0.0.0:8456` publica
+`8456 → 80` en el contenedor y `API_BIND=127.0.0.1:31415` publica
+`31415 → 3000`. No incluyas el puerto interno en estas variables.
 
 ## 3. Levantar
 

@@ -29,8 +29,8 @@ services:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: '3000'
-    # Publicado solo en localhost (util para depurar con curl). Sobrescribe
-    # API_BIND (por ejemplo 0.0.0.0:3000) si necesitas exponerlo a la red.
+    # Formato: <IP_del_host>:<puerto_del_host> (el puerto interno 3000 lo agrega
+    # el compose). Sobrescribe API_BIND (ej. 0.0.0.0:31415) si necesitas exponerlo.
     ports:
       - '${API_BIND:-127.0.0.1:3000}:3000'
     healthcheck:
@@ -55,8 +55,10 @@ services:
       API_BACKEND: '${API_BACKEND:-http://api:3000}'
       # server_name de nginx (default "_" para responder a cualquier Host).
       SERVER_NAME: '${SERVER_NAME:-_}'
+    # Formato: <IP_del_host>:<puerto_del_host> (el puerto interno 80 lo agrega
+    # el compose). Ej.: 0.0.0.0:8456 o 127.0.0.1:8456 detrás de un proxy TLS.
     ports:
-      - '${WEB_BIND:-8080:80}'
+      - '${WEB_BIND:-8080}:80'
     depends_on:
       api:
         condition: service_healthy

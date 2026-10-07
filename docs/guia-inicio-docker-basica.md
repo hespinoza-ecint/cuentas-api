@@ -159,12 +159,13 @@ nano .env
 > los contenedores: las claves y secretos van en `.env.production` (sección 4).
 
 ```ini
-# Puerto público del front: <IP_del_host>:<puerto_externo>:80
+# Front: <IP_del_host>:<puerto_del_host>. El puerto interno (80) lo agrega el compose.
 # - 0.0.0.0 permite acceso desde fuera; usa 127.0.0.1 si pondrás un proxy con HTTPS.
-WEB_BIND=0.0.0.0:8456:80
+WEB_BIND=0.0.0.0:8456
 
-# Puerto del API: solo local, para depurar (curl). No lo abras a Internet.
-API_BIND=127.0.0.1:31415:3000
+# API: <IP_del_host>:<puerto_del_host>. El interno (3000) lo agrega el compose.
+# Solo local, para depurar (curl). No lo abras a Internet.
+API_BIND=127.0.0.1:31415
 
 # Nombre del servidor para nginx (tu dominio, o "_" para cualquiera).
 SERVER_NAME=app.tudominio.com
@@ -173,10 +174,14 @@ SERVER_NAME=app.tudominio.com
 API_BACKEND=http://api:3000
 ```
 
+**Importante:** no agregues `:80` ni `:3000` al final de `WEB_BIND`/`API_BIND`;
+el compose ya agrega el puerto interno. Si escribes `127.0.0.1:31415:3000` el
+compose falla con `invalid IP address`.
+
 | Variable | Para qué | Ejemplo no típico |
 |---|---|---|
-| `WEB_BIND` | Entrada al front (navegador) | `0.0.0.0:8456:80` |
-| `API_BIND` | API solo para depurar en el host | `127.0.0.1:31415:3000` |
+| `WEB_BIND` | Entrada al front (navegador) | `0.0.0.0:8456` |
+| `API_BIND` | API solo para depurar en el host | `127.0.0.1:31415` |
 | `DATABASE_URL` (`.env.production`) | Puerto de MySQL | `...:3307/cuentas` |
 | `SERVER_NAME` | Dominio que atiende nginx | `app.tudominio.com` |
 
@@ -269,7 +274,7 @@ sudo systemctl reload caddy
 
 Con **nginx + certbot** es equivalente: `proxy_pass http://127.0.0.1:8456;`
 reenviando `Host` y `X-Forwarded-*`. Si pones un proxy delante, cambia
-`WEB_BIND` a `127.0.0.1:8456:80` para que solo el proxy pueda entrar.
+`WEB_BIND` a `127.0.0.1:8456` para que solo el proxy pueda entrar.
 
 ## 10. Contraseñas y secretos en producción (lo correcto y seguro)
 
