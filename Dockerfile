@@ -5,8 +5,8 @@
 #
 # Etapas:
 #   build  compila el cliente de Prisma para MySQL y la app (Nest)
-#   prod   runtime minimo, sin devDependencies y con usuario sin privilegios
 #   seed   tareas puntuales (seed, mysql:diff, ...) con devDependencies
+#   prod   runtime minimo (ULTIMA etapa: es la que se usa por defecto)
 #
 # La base MySQL es externa: aplica prisma/mysql/init.sql una sola vez en una
 # base vacia y configura DATABASE_URL (ver docs/despliegue-docker.md).
@@ -33,7 +33,12 @@ COPY . .
 RUN npm run mysql:sql && npm run mysql:generate
 RUN npm run build
 
-# ---------- Runtime ----------------------------------------------------------
+# ---------- Tareas puntuales (seed / esquema) --------------------------------
+FROM build AS seed
+ENV NODE_ENV=production
+CMD ["npm", "run", "db:seed"]
+
+# ---------- Runtime (etapa por defecto) --------------------------------------
 FROM node:24-bookworm-slim AS prod
 WORKDIR /app
 ENV NODE_ENV=production \
@@ -57,8 +62,3 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 CMD ["node", "dist/main.js"]
-
-# ---------- Tareas puntuales (seed / esquema) --------------------------------
-FROM build AS seed
-ENV NODE_ENV=production
-CMD ["npm", "run", "db:seed"]

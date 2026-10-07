@@ -21,6 +21,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # La ultima etapa del Dockerfile es "seed"; el servicio api debe usar "prod".
+      target: prod
     image: cuentas-api:latest
     restart: unless-stopped
     env_file:
