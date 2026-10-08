@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { InstallmentPlan, Prisma, Purchase } from '@prisma/client';
+import { Installment, InstallmentPlan, Prisma, Purchase } from '@prisma/client';
 import { PrismaService } from '../../../infrastructure/prisma/prisma.service';
 
 export type PurchaseWithPlan = Prisma.PurchaseGetPayload<{
@@ -84,6 +84,21 @@ export class PurchasesRepository {
   ): Promise<(Purchase & { installmentPlan: InstallmentPlan | null }) | null> {
     const client = tx ?? this.prisma;
     return client.purchase.findFirst({ where: { id, userId }, include: { installmentPlan: true } });
+  }
+
+  /** Compra con su plan y mensualidades (para eliminarla con ajustes). */
+  findRawWithInstallments(
+    userId: string,
+    id: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<
+    (Purchase & { installmentPlan: (InstallmentPlan & { installments: Installment[] }) | null }) | null
+  > {
+    const client = tx ?? this.prisma;
+    return client.purchase.findFirst({
+      where: { id, userId },
+      include: { installmentPlan: { include: { installments: true } } },
+    });
   }
 
   create(

@@ -265,6 +265,196 @@ describe('Compras y mensualidades (integracion)', () => {
     expect(blocked.body.reason).toBe('PLAN_HAS_PAYMENTS');
   });
 
+  it('RN-27: elimina una compra MSI con pagos, revierte lo pendiente y ajusta la tarjeta', async () => {
+    const user = await createVerifiedUser(app, 'purchase-delete');
+    const card = await createCard(app, user.accessToken, { creditLimit: 3000000 });
+    const account = await createCashAccount(app, user.accessToken, { openingBalance: 500000 });
+    const today = todayInTimeZone('America/Mexico_City');
+
+    const purchase = await createPurchase(user, {
+      creditCardId: card.id,
+      description: 'MSI por eliminar',
+      amount: 90000,
+      purchaseDate: today,
+      type: 'MSI',
+      months: 3,
+    });
+
+    // Paga la primera mensualidad: la cancelacion normal ya no aplica.
+    await request(app.getHttpServer())
+      .post(`/api/v1/installment-plans/${purchase.installmentPlan.id}/prepay`)
+      .set(...authHeader(user.accessToken))
+      .send({ cashAccountId: account.id, amount: 30000, paymentDate: today })
+      .expect(201);
+
+    const removed = await request(app.getHttpServer())
+      .delete(`/api/v1/purchases/${purchase.id}`)
+      .set(...authHeader(user.accessToken))
+      .send({ reason: 'Registrada por error' })
+      .expect(200);
+
+    expect(removed.body.deleted).toBe(true);
+    expect(removed.body.refundedPrincipal).toBe(60000);
+    expect(removed.body.paidAmount).toBe(30000);
+
+    // La tarjeta queda sin la deuda pendiente de la compra.
+    const cardAfter = await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(cardAfter.body.currentBalance).toBe(0);
+    expect(cardAfter.body.availableCredit).toBe(3000000);
+
+    // El registro desaparece (compra y plan).
+    await request(app.getHttpServer())
+      .get(`/api/v1/purchases/${purchase.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(404);
+    await request(app.getHttpServer())
+      .get(`/api/v1/installment-plans/${purchase.installmentPlan.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(404);
+
+    // Los cortes siguen respondiendo y se recalculan sin las mensualidades.
+    const statements = await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}/statements`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(Array.isArray(statements.body)).toBe(true);
+
+    // El efectivo ya pagado no se toca.
+    const accountAfter = await request(app.getHttpServer())
+      .get(`/api/v1/cash-accounts/${account.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(accountAfter.body.currentBalance).toBe(470000);
+  });
+
+  it('RN-27: elimina una compra liquidada sin tocar el saldo de la tarjeta', async () => {
+    const user = await createVerifiedUser(app, 'purchase-delete-paid');
+    const card = await createCard(app, user.accessToken, { creditLimit: 3000000 });
+    const account = await createCashAccount(app, user.accessToken, { openingBalance: 500000 });
+    const today = todayInTimeZone('America/Mexico_City');
+
+    const purchase = await createPurchase(user, {
+      creditCardId: card.id,
+      description: 'MSI ya pagada',
+      amount: 90000,
+      purchaseDate: today,
+      type: 'MSI',
+      months: 3,
+    });
+
+    await request(app.getHttpServer())
+      .post(`/api/v1/installment-plans/${purchase.installmentPlan.id}/prepay`)
+      .set(...authHeader(user.accessToken))
+      .send({ cashAccountId: account.id, amount: 90000, paymentDate: today })
+      .expect(201);
+
+    const removed = await request(app.getHttpServer())
+      .delete(`/api/v1/purchases/${purchase.id}`)
+      .set(...authHeader(user.accessToken))
+      .send({ reason: 'Limpiar historial' })
+      .expect(200);
+
+    expect(removed.body.refundedPrincipal).toBe(0);
+    expect(removed.body.paidAmount).toBe(90000);
+
+    const cardAfter = await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(cardAfter.body.currentBalance).toBe(0);
+
+    await request(app.getHttpServer())
+      .get(`/api/v1/purchases/${purchase.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(404);
+  });
+
+  it('RN-27: elimina una compra MSI al corriente sin doble reverso', async () => {
+    const user = await createVerifiedUser(app, 'purchase-delete-ongoing');
+    const today = todayInTimeZone('America/Mexico_City');
+    const card = await createCard(app, user.accessToken, {
+      creditLimit: 3000000,
+      cutDay: 15,
+      dueDaysAfterCut: 20,
+    });
+    const startMonth = addMonths(today, -4).slice(0, 7);
+
+    const purchase = await createPurchase(user, {
+      creditCardId: card.id,
+      description: 'MSI al corriente',
+      amount: 600000,
+      purchaseDate: today,
+      type: 'MSI',
+      months: 6,
+      firstStatementMonth: startMonth,
+    });
+
+    const pendingPrincipal = purchase.installmentPlan.outstandingPrincipal as number;
+    expect(pendingPrincipal).toBeGreaterThan(0);
+    expect(pendingPrincipal).toBeLessThan(600000);
+
+    const removed = await request(app.getHttpServer())
+      .delete(`/api/v1/purchases/${purchase.id}`)
+      .set(...authHeader(user.accessToken))
+      .send({ reason: 'Ya no la uso' })
+      .expect(200);
+
+    expect(removed.body.refundedPrincipal).toBe(pendingPrincipal);
+
+    const cardAfter = await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(cardAfter.body.currentBalance).toBe(0);
+    expect(cardAfter.body.availableCredit).toBe(3000000);
+  });
+
+  it('RN-27: solo aplica a compras con plan y respeta el aislamiento', async () => {
+    const user = await createVerifiedUser(app, 'purchase-delete-scope');
+    const other = await createVerifiedUser(app, 'purchase-delete-other');
+    const card = await createCard(app, user.accessToken, { creditLimit: 3000000 });
+    const today = todayInTimeZone('America/Mexico_City');
+
+    const regular = await createPurchase(user, {
+      creditCardId: card.id,
+      description: 'Regular no eliminable',
+      amount: 10000,
+      purchaseDate: today,
+      type: 'REGULAR',
+    });
+
+    const rejected = await request(app.getHttpServer())
+      .delete(`/api/v1/purchases/${regular.id}`)
+      .set(...authHeader(user.accessToken))
+      .send({ reason: 'No aplica' })
+      .expect(422);
+    expect(rejected.body.reason).toBe('DELETE_REQUIRES_PLAN');
+
+    const msi = await createPurchase(user, {
+      creditCardId: card.id,
+      description: 'MSI privada',
+      amount: 30000,
+      purchaseDate: today,
+      type: 'MSI',
+      months: 3,
+    });
+
+    await request(app.getHttpServer())
+      .delete(`/api/v1/purchases/${msi.id}`)
+      .set(...authHeader(other.accessToken))
+      .send({ reason: 'Ajena' })
+      .expect(404);
+
+    await request(app.getHttpServer())
+      .delete(`/api/v1/purchases/${msi.id}`)
+      .set(...authHeader(user.accessToken))
+      .send({ reason: 'Duplicada' })
+      .expect(200);
+  });
+
   it('RN-21: anticipos reducen plazo y liquidan el plan', async () => {
     const user = await createVerifiedUser(app, 'purchase-prepay');
     const card = await createCard(app, user.accessToken, { creditLimit: 3000000 });

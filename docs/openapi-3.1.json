@@ -2680,6 +2680,49 @@
         "tags": [
           "purchases"
         ]
+      },
+      "delete": {
+        "operationId": "PurchasesController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeletePurchaseDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "purchases"
+        ]
       }
     },
     "/api/v1/purchases/{id}/cancel": {
@@ -4634,6 +4677,18 @@
         ]
       },
       "CancelPurchaseDto": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "reason"
+        ]
+      },
+      "DeletePurchaseDto": {
         "type": "object",
         "properties": {
           "reason": {

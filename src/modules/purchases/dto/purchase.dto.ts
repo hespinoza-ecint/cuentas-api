@@ -127,6 +127,14 @@ export class CancelPurchaseDto {
   reason!: string;
 }
 
+/** Eliminacion definitiva de una compra con plan (MSI o diferida). */
+export class DeletePurchaseDto {
+  @IsString({ message: 'reason debe ser texto' })
+  @IsNotEmpty({ message: 'reason es obligatorio' })
+  @MaxLength(300, { message: 'reason no debe exceder 300 caracteres' })
+  reason!: string;
+}
+
 export class PrepayPlanDto {
   @IsUUID('4', { message: 'cashAccountId debe ser un UUID' })
   cashAccountId!: string;

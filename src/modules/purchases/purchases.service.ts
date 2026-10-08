@@ -17,6 +17,7 @@ import {
 import {
   buildFrenchSchedule,
   buildMsiSchedule,
+  outstandingPrincipalOf,
 } from '../../domain/installments/amortization';
 import { addDays, compareLocalDates } from '../../domain/shared/local-date';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
@@ -31,6 +32,7 @@ import { FinancialDatePolicy } from '../ledger/financial-date.policy';
 import {
   CancelPurchaseDto,
   CreatePurchaseDto,
+  DeletePurchaseDto,
   ListPurchasesQueryDto,
   PrepayPlanDto,
 } from './dto/purchase.dto';
@@ -43,6 +45,15 @@ import {
 export interface PaginatedPurchases {
   data: PurchaseWithPlan[];
   meta: { limit: number; nextCursor: string | null; hasMore: boolean };
+}
+
+/** Resultado de eliminar una compra con plan. */
+export interface DeletePurchaseResult {
+  deleted: true;
+  /** Cargo pendiente revertido en el libro de la tarjeta (centavos). */
+  refundedPrincipal: number;
+  /** Pagos y anticipos ya aplicados a las mensualidades desde la app. */
+  paidAmount: number;
 }
 
 export interface PurchaseOriginOptions {
@@ -468,6 +479,106 @@ export class PurchasesService {
     });
 
     return this.get(userId, id);
+  }
+
+  /**
+   * RN-27: eliminar una compra con plan (MSI o diferida) aunque ya tenga
+   * mensualidades pagadas. Revierte en la tarjeta solo lo que la compra aun
+   * pesa (cargo original menos pagos aplicados), cancela lo pendiente y borra
+   * el registro. Lo ya pagado no se modifica.
+   */
+  async remove(
+    userId: string,
+    id: string,
+    dto: DeletePurchaseDto,
+    meta: RequestMeta,
+  ): Promise<DeletePurchaseResult> {
+    const purchase = await this.purchases.findRawWithInstallments(userId, id);
+    if (!purchase) {
+      throw new NotFoundError('La compra no existe.', { reason: 'PURCHASE_NOT_FOUND' });
+    }
+
+    const plan = purchase.installmentPlan;
+    if (!plan) {
+      throw new UnprocessableEntityError(
+        'Solo las compras a meses o diferidas se pueden eliminar; una compra regular se cancela.',
+        { reason: 'DELETE_REQUIRES_PLAN' },
+      );
+    }
+
+    const today = await this.datePolicy.today(userId);
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      // Cargo original de la compra en el libro de la tarjeta (principal).
+      const charge = await tx.cardLedgerEntry.findFirst({
+        where: {
+          userId,
+          type: 'PURCHASE',
+          sourceType: 'InstallmentPlan',
+          sourceId: purchase.id,
+        },
+        select: { amount: true },
+      });
+
+      // Pagos y anticipos ya aplicados a las mensualidades de este plan.
+      const paid = await tx.paymentAllocation.aggregate({
+        where: { userId, installment: { planId: plan.id } },
+        _sum: { amount: true },
+      });
+
+      const chargedAmount = charge?.amount ?? outstandingPrincipalOf(plan.installments);
+      const paidAmount = paid._sum.amount ?? 0;
+      // Si el plan ya se habia cancelado (con su reverso), no se repite.
+      const refundedPrincipal =
+        plan.status === 'CANCELLED' ? 0 : Math.max(chargedAmount - paidAmount, 0);
+
+      if (refundedPrincipal > 0) {
+        await this.cardLedger.postEntry(
+          {
+            userId,
+            creditCardId: purchase.creditCardId,
+            type: 'REFUND',
+            amount: -refundedPrincipal,
+            occurredOn: today,
+            description: `Eliminacion: ${purchase.description}`,
+            sourceType: 'PurchaseDeletion',
+            sourceId: purchase.id,
+            createdById: userId,
+          },
+          tx,
+        );
+      }
+
+      // Borra la compra y, en cascada, su plan y mensualidades. Las asignaciones
+      // de pago conservan su monto (solo pierden la liga a la mensualidad) y los
+      // estados de cuenta se recalculan del libro cuando se consultan.
+      await tx.purchase.delete({ where: { id: purchase.id } });
+
+      await this.audit.record(
+        {
+          action: 'purchase.deleted',
+          entityType: 'Purchase',
+          entityId: purchase.id,
+          userId,
+          actorUserId: userId,
+          changes: {
+            description: purchase.description,
+            amount: purchase.amount,
+            type: purchase.type,
+            months: plan.months,
+            refundedPrincipal,
+            paidAmount,
+            reason: dto.reason,
+          },
+          ...meta,
+        },
+        tx,
+      );
+
+      return { refundedPrincipal, paidAmount };
+    });
+
+    return { deleted: true, ...result };
   }
 
   /**

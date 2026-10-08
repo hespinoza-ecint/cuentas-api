@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseUUIDPipe,
@@ -18,6 +19,7 @@ import { Idempotent } from '../../common/idempotency/idempotent.decorator';
 import {
   CancelPurchaseDto,
   CreatePurchaseDto,
+  DeletePurchaseDto,
   ListPurchasesQueryDto,
 } from './dto/purchase.dto';
 import { PurchasesService } from './purchases.service';
@@ -58,5 +60,17 @@ export class PurchasesController {
     @Req() request: FastifyRequest,
   ) {
     return this.purchasesService.cancel(user.id, id, dto, requestMeta(request));
+  }
+
+  /** RN-27: elimina la compra con plan y revierte lo pendiente en la tarjeta. */
+  @Delete(':id')
+  @RequireVerifiedEmail()
+  remove(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: DeletePurchaseDto,
+    @Req() request: FastifyRequest,
+  ) {
+    return this.purchasesService.remove(user.id, id, dto, requestMeta(request));
   }
 }

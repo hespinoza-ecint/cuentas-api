@@ -1221,7 +1221,7 @@ Los días que no existen en un mes se ajustan al último día. Las fechas se aju
 
 # 7. Reglas de Negocio
 
-## 7.1 Reglas formales RN-01 a RN-26 (todas implementadas)
+## 7.1 Reglas formales RN-01 a RN-27 (todas implementadas)
 
 | ID | Regla | Dónde vive |
 |---|---|---|
@@ -1251,6 +1251,7 @@ Los días que no existen en un mes se ajustan al último día. Las fechas se aju
 | RN-24 | Anualidad como cargo/obligación futura | Obligación `Anualidad {alias}` en recomendaciones |
 | RN-25 | Gasto = efectivo/débito; compra = tarjeta | `Expenses` vs `Purchases` |
 | RN-26 | Errores/cancelaciones se corrigen con reverso | `reverse` en movimientos/gastos/pagos; cancelación de compra con `REFUND` |
+| RN-27 | Eliminar una compra con plan (MSI/diferida) revierte en la tarjeta solo el cargo pendiente (cargo original − pagos aplicados), cancela lo pendiente y borra el registro; lo ya pagado no se toca | `PurchasesService.remove` (entrada `REFUND` con `sourceType = PurchaseDeletion`, auditoría `purchase.deleted`) |
 
 | Recurrente con tarjeta se confirma como compra | `paymentMethod = CREDIT_CARD` crea `Purchase` REGULAR + entrada `PURCHASE`; efectivo crea `Expense` + movimiento | `PAYMENT_METHOD_REQUIRED`, `CREDIT_CARD_REQUIRED`, `CARD_NOT_FOUND`, `CARD_INACTIVE` |
 | Una ocurrencia se confirma una sola vez | Único `(recurringExpenseId, occurrenceDate)` en Expense y Purchase | `OCCURRENCE_ALREADY_CONFIRMED` |
@@ -1923,6 +1924,7 @@ Errores: `422 PAYMENT_EXCEEDS_BALANCE`, `422 CARD_WITHOUT_BALANCE`, `422 CARD_IN
 | POST | `/purchases` | Registra compra (regular/MSI/diferida) — **@Idempotent** |
 | GET | `/purchases/:id` | Detalle |
 | POST | `/purchases/:id/cancel` | Cancelación/devolución (solo sin pagos) |
+| DELETE | `/purchases/:id` | Eliminar compra con plan (MSI/diferida), con pagos incluidos (RN-27) |
 | GET | `/installment-plans/:id` | Plan + mensualidades |
 | POST | `/installment-plans/:id/prepay` | Anticipo/liquidación — **@Idempotent** |
 
@@ -1961,6 +1963,13 @@ Errores: `422 PAYMENT_EXCEEDS_BALANCE`, `422 CARD_WITHOUT_BALANCE`, `422 CARD_IN
 Errores: `400 MONTHS_REQUIRED`, `400 MSI_WITH_RATE`, `400 RATE_REQUIRED`, `400 START_MONTH_REQUIRES_PLAN`, `422 PLAN_ALREADY_PAID_OFF`, `400 RECOMMENDATION_NOT_FOUND`, `422 CARD_INACTIVE`, `400 CATEGORY_KIND_MISMATCH`.
 
 **POST /purchases/:id/cancel → 201** · `{ "reason": "Devolución completa" }` → compra `CANCELLED`, plan `CANCELLED`, mensualidades `CANCELLED`, entrada `REFUND` que restaura el crédito. Errores: `409 PURCHASE_NOT_ACTIVE`, `422 PLAN_HAS_PAYMENTS`.
+
+**DELETE /purchases/:id → 200** · `{ "reason": "Registrada por error" }` → elimina la compra con plan aunque tenga mensualidades pagadas. Revierte en el libro de la tarjeta el cargo pendiente (`refundedPrincipal = cargo original − pagos/anticipos aplicados`), borra compra, plan y mensualidades (cascada) y registra `purchase.deleted` en auditoría. Los pagos y movimientos de efectivo ya hechos no se modifican; los estados de cuenta se recalculan del libro al consultarse.
+```json
+// Response
+{ "deleted": true, "refundedPrincipal": 60000, "paidAmount": 30000 }
+```
+Errores: `404 PURCHASE_NOT_FOUND` (también si es de otro usuario), `422 DELETE_REQUIRES_PLAN` (las regulares se cancelan).
 
 **GET /installment-plans/:id → 200**
 ```json
@@ -4808,6 +4817,49 @@ Tipos de evento: `INCOME`, `RECURRING_EXPENSE`, `CARD_STATEMENT`, `INSTALLMENT`,
         "tags": [
           "purchases"
         ]
+      },
+      "delete": {
+        "operationId": "PurchasesController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeletePurchaseDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "purchases"
+        ]
       }
     },
     "/api/v1/purchases/{id}/cancel": {
@@ -6773,6 +6825,18 @@ Tipos de evento: `INCOME`, `RECURRING_EXPENSE`, `CARD_STATEMENT`, `INSTALLMENT`,
           "reason"
         ]
       },
+      "DeletePurchaseDto": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "reason"
+        ]
+      },
       "PrepayPlanDto": {
         "type": "object",
         "properties": {
@@ -7391,7 +7455,7 @@ Holiday calendars: MX_BANKING (default) | MX_LABOR
 
 **Tarjetas:** `GET/POST /cards`, `GET/PATCH/DELETE /cards/:id`, `POST /cards/:id/reconcile`, `GET /cards/:id/ledger`, `GET /cards/:id/statements`, `GET /cards/:id/statements/current`, `GET/PATCH /cards/:id/statements/:statementId`; `GET/POST /card-payments`*, `GET /card-payments/:id`, `POST /card-payments/:id/reverse`.
 
-**Compras:** `GET/POST /purchases`*, `GET /purchases/:id`, `POST /purchases/:id/cancel`; `GET /installment-plans/:id`, `POST /installment-plans/:id/prepay`*.
+**Compras:** `GET/POST /purchases`*, `GET /purchases/:id`, `POST /purchases/:id/cancel`, `DELETE /purchases/:id`; `GET /installment-plans/:id`, `POST /installment-plans/:id/prepay`*.
 
 **Recomendaciones:** `POST /recommendations`, `GET /recommendations`, `GET /recommendations/:id`, `GET /recommendation-rules`, `PUT/DELETE /recommendation-rules/:code/override`.
 
