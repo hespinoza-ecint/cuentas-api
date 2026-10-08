@@ -88,3 +88,22 @@ npx.cmd jest test/integration/purchases.spec.ts   # 20 pruebas en total
   `documentacion-tecnica-backend.md`.
 - El frontend usa `DELETE /purchases/{id}` desde la pantalla de Compras (ver
   `cuentas-web/docs/fase-14-eliminar-compras.md`).
+
+### Reparación de eliminaciones anteriores a este fix (opcional)
+
+Si eliminaste una compra antes de este cambio, su reverso quedó fechado hoy y el
+corte cerrado todavía muestra el pago. El saldo de la tarjeta ya es correcto; lo
+único que falta es **volver a fechar el reverso en la fecha del cargo original**
+(la fecha no afecta el saldo actual; los cortes se recalculan al consultarse).
+Respalda la base antes de correrlo:
+
+```sql
+UPDATE CardLedgerEntry r
+JOIN CardLedgerEntry c ON c.sourceId = r.sourceId AND c.type = 'PURCHASE'
+SET r.occurredOn = c.occurredOn
+WHERE r.type = 'REFUND' AND r.sourceType = 'PurchaseDeletion';
+```
+
+La condición `sourceType = 'PurchaseDeletion'` solo toca los reversos de
+eliminación hechos antes del fix (las cancelaciones usan otro `sourceType` y no
+se modifican).
