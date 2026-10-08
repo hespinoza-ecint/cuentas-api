@@ -1798,7 +1798,7 @@ Errores: `409 OCCURRENCE_ALREADY_REGISTERED`, `404 INCOME_SOURCE_NOT_FOUND`, `40
 |---|---|---|
 | GET | `/recurring-expenses?includeInactive=true` | Listado (activos por defecto) |
 | POST | `/recurring-expenses` | Crea recurrente |
-| GET | `/recurring-expenses/upcoming` | Próximas ocurrencias |
+| GET | `/recurring-expenses/upcoming` | Ocurrencias por confirmar (vencidas recientes + próximas) |
 | GET | `/recurring-expenses/:id` | Detalle |
 | PATCH | `/recurring-expenses/:id` | Edita (incluye `isActive`) |
 | DELETE | `/recurring-expenses/:id` | Borrado lógico |
@@ -1822,13 +1822,15 @@ Errores: `409 OCCURRENCE_ALREADY_REGISTERED`, `404 INCOME_SOURCE_NOT_FOUND`, `40
   "isActive": true, "...": "..." }
 ```
 **GET /recurring-expenses?includeInactive=true → 200** · cada elemento incluye `category {id,name}`, `cashAccount {id,name}` y `creditCard {id,alias,last4}`.
-**GET /recurring-expenses/upcoming?days=60&limit=50 → 200**
+**GET /recurring-expenses/upcoming?days=60&limit=50 → 200** · Lista las ocurrencias **vencidas recientes** (hasta `backdateLimitDays` hacia atrás, con `daysUntil < 0`) y las próximas dentro del horizonte; excluye las ya confirmadas. Confirmar una vencida la registra con su fecha original, así que cae en el corte que le corresponde.
 ```json
 { "today": "2026-10-02", "timezone": "America/Mexico_City", "horizonDays": 60,
-  "occurrences": [ { "recurringExpenseId": "uuid", "name": "Renta", "expectedDate": "2026-11-01",
+  "occurrences": [ { "recurringExpenseId": "uuid", "name": "Renta", "expectedDate": "2026-10-01",
+                     "amount": 1200000, "categoryId": "uuid", "daysUntil": -1 },
+                   { "recurringExpenseId": "uuid", "name": "Renta", "expectedDate": "2026-11-01",
                      "amount": 1200000, "categoryId": "uuid", "daysUntil": 30 } ] }
 ```
-**POST /recurring-expenses/:id/confirm → 201**
+**POST /recurring-expenses/:id/confirm → 201** · `actualDate` es opcional: sin él, una ocurrencia vencida se registra en su fecha (`occurrenceDate`) y una futura confirmada antes de tiempo, en hoy.
 ```json
 // Request: { "occurrenceDate": "2026-10-01", "actualAmount": 1200000, "actualDate": "2026-10-01" }
 // Response efectivo: { "expenseId": "uuid", "movementId": "uuid" }

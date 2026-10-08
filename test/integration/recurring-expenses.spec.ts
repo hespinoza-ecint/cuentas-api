@@ -238,6 +238,77 @@ describe('Gastos recurrentes (integracion)', () => {
     expect(duplicate.body.reason).toBe('OCCURRENCE_ALREADY_CONFIRMED');
   });
 
+  it('lista ocurrencias vencidas y al confirmarlas caen en el corte que les toca', async () => {
+    const user = await createVerifiedUser(app, 'recurring-overdue');
+    const today = todayInTimeZone('America/Mexico_City');
+    const openingDate = addDays(today, -40);
+    const card = await createCard(app, user.accessToken, {
+      creditLimit: 3000000,
+      cutDay: Number(openingDate.slice(8, 10)),
+      dueDaysAfterCut: 10,
+    });
+    const occurrenceDate = addDays(today, -38);
+
+    const created = await request(app.getHttpServer())
+      .post('/api/v1/recurring-expenses')
+      .set(...authHeader(user.accessToken))
+      .send({
+        name: 'Suscripcion vencida',
+        amount: 30000,
+        paymentMethod: 'CREDIT_CARD',
+        creditCardId: card.id,
+        schedule: {
+          frequency: 'CUSTOM',
+          config: { specificDates: [occurrenceDate] },
+          nonBusinessDayRule: 'NONE',
+          startDate: occurrenceDate,
+        },
+      })
+      .expect(201);
+
+    // La ocurrencia vencida se lista para poder confirmarla.
+    const upcomingOverdue = await request(app.getHttpServer())
+      .get('/api/v1/recurring-expenses/upcoming?days=60')
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    const overdue = upcomingOverdue.body.occurrences.find(
+      (occurrence: { expectedDate: string }) => occurrence.expectedDate === occurrenceDate,
+    );
+    expect(overdue).toBeDefined();
+    expect(overdue.daysUntil).toBeLessThan(0);
+
+    // Confirmarla sin fecha real la registra en su fecha original.
+    const confirmation = await request(app.getHttpServer())
+      .post(`/api/v1/recurring-expenses/${created.body.id}/confirm`)
+      .set(...authHeader(user.accessToken))
+      .send({ occurrenceDate })
+      .expect(201);
+    expect(confirmation.body.purchaseId).toEqual(expect.any(String));
+
+    const purchases = await request(app.getHttpServer())
+      .get('/api/v1/purchases')
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(purchases.body.data).toHaveLength(1);
+    expect(purchases.body.data[0].purchaseDate).toBe(occurrenceDate);
+
+    // El corte ya cerrado incluye el cargo: no se va a un corte futuro.
+    const statements = await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}/statements`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(statements.body).toHaveLength(1);
+    expect(statements.body[0].noInterestPaymentCalc).toBe(30000);
+    expect(statements.body[0].cycleCharges).toBe(30000);
+
+    // Y ya no queda pendiente por confirmar.
+    const upcomingAfter = await request(app.getHttpServer())
+      .get('/api/v1/recurring-expenses/upcoming?days=60')
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(upcomingAfter.body.occurrences).toHaveLength(0);
+  });
+
   it('valida el metodo de pago, la tarjeta y permite cambiar de efectivo a tarjeta', async () => {
     const user = await createVerifiedUser(app, 'recurring-card-validation');
     const account = await createCashAccount(app, user.accessToken);

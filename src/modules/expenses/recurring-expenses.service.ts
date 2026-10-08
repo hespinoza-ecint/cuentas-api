@@ -202,6 +202,10 @@ export class RecurringExpensesService {
     const days = query.days ?? settings.projectionMinDays;
     const limit = query.limit ?? 50;
     const horizon = addDays(today, days);
+    // Tambien se listan las vencidas recientes (hasta el limite de dias hacia
+    // atras): al confirmarlas quedan fechadas en su dia real y caen en el corte
+    // que les corresponde, no en uno futuro.
+    const from = addDays(today, -settings.backdateLimitDays);
 
     const recurrences = recurrenceId
       ? [await this.get(userId, recurrenceId)]
@@ -209,7 +213,7 @@ export class RecurringExpensesService {
 
     const holidays = await this.holidays.getHolidaySet(
       settings.holidayCalendarCode,
-      addDays(today, -15),
+      addDays(from, -15),
       horizon,
     );
 
@@ -223,8 +227,8 @@ export class RecurringExpensesService {
         endDate: recurrence.endDate,
         rule: recurrence.nonBusinessDayRule as NonBusinessDayRule,
         holidays,
-        from: today,
-        limit: 60,
+        from,
+        limit: 180,
       });
 
       if (dates.length === 0) {
