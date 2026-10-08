@@ -1221,7 +1221,7 @@ Los días que no existen en un mes se ajustan al último día. Las fechas se aju
 
 # 7. Reglas de Negocio
 
-## 7.1 Reglas formales RN-01 a RN-27 (todas implementadas)
+## 7.1 Reglas formales RN-01 a RN-28 (todas implementadas)
 
 | ID | Regla | Dónde vive |
 |---|---|---|
@@ -1252,6 +1252,7 @@ Los días que no existen en un mes se ajustan al último día. Las fechas se aju
 | RN-25 | Gasto = efectivo/débito; compra = tarjeta | `Expenses` vs `Purchases` |
 | RN-26 | Errores/cancelaciones se corrigen con reverso | `reverse` en movimientos/gastos/pagos; cancelación de compra con `REFUND` |
 | RN-27 | Eliminar una compra (regular, MSI o diferida) revierte en la tarjeta el cargo vivo —con plan: cargo original − pagos aplicados; regular: hasta la deuda actual— fechado en el periodo original para que los cortes ya cerrados se recalculen, y borra el registro; lo ya pagado no se toca | `PurchasesService.remove` (entrada `REFUND` con `allowBackdated`, auditoría `purchase.deleted`); en regulares resta de los cargos del periodo (`statements.service`) |
+| RN-28 | Reiniciar una tarjeta borra su dominio completo y la deja con saldo 0 y crédito completo; eliminarla borra además la tarjeta y los recurrentes ligados a ella. Los movimientos de efectivo de pagos no se tocan | `CardsService.reset` / `CardsService.remove` (`purgeDomain`, auditorías `credit_card.reset` / `credit_card.deleted`) |
 
 | Recurrente con tarjeta se confirma como compra | `paymentMethod = CREDIT_CARD` crea `Purchase` REGULAR + entrada `PURCHASE`; efectivo crea `Expense` + movimiento | `PAYMENT_METHOD_REQUIRED`, `CREDIT_CARD_REQUIRED`, `CARD_NOT_FOUND`, `CARD_INACTIVE` |
 | Una ocurrencia se confirma una sola vez | Único `(recurringExpenseId, occurrenceDate)` en Expense y Purchase | `OCCURRENCE_ALREADY_CONFIRMED` |
@@ -1843,7 +1844,8 @@ Errores: `409 OCCURRENCE_ALREADY_CONFIRMED`, `400 PAYMENT_METHOD_REQUIRED`, `400
 | POST | `/cards` | Crea tarjeta (saldo inicial opcional) |
 | GET | `/cards/:id` | Detalle |
 | PATCH | `/cards/:id` | Edita tarjeta |
-| DELETE | `/cards/:id` | Borrado lógico (solo sin saldo) |
+| DELETE | `/cards/:id` | Elimina la tarjeta y todo su historial (RN-28) |
+| POST | `/cards/:id/reset` | Reinicia la tarjeta: borra su historial y la deja como nueva (RN-28) |
 | POST | `/cards/:id/reconcile` | Conciliación con el banco |
 | GET | `/cards/:id/ledger` | Libro de la tarjeta |
 | GET | `/cards/:id/statements` | Estados de cuenta (materializa cortes) |
@@ -1867,7 +1869,14 @@ Errores: `409 OCCURRENCE_ALREADY_CONFIRMED`, `400 PAYMENT_METHOD_REQUIRED`, `400
 ```
 Errores: `400 DUE_DAY_REQUIRED`, `409` alias duplicado, `422` fecha inválida.
 **PATCH /cards/:id → 200** · `{ "creditLimit": 4000000 }` · Errores: `422 LIMIT_BELOW_BALANCE`, `400 DUE_DAY_REQUIRED`.
-**DELETE /cards/:id → 204** · Errores: `422 CARD_WITH_BALANCE`.
+**POST /cards/:id/reset → 201** · `{ "reason": "Tarjeta de pruebas" }` → borra el dominio de la tarjeta (libro, cortes, pagos, asignaciones, compras, planes y mensualidades) y la deja con `currentBalance = 0` y `availableCredit = creditLimit`. La tarjeta, los recurrentes y los movimientos de efectivo de los pagos siguen intactos. Errores: `404 CARD_NOT_FOUND`.
+**DELETE /cards/:id → 200** · `{ "reason": "Ya no la uso" }` → igual que el reinicio y además borra la tarjeta (borrado real: el alias queda libre) y los recurrentes configurados con ella. Los movimientos de efectivo de los pagos no se tocan.
+```json
+// Response (ambos)
+{ "message": "...", "deleted": { "purchases": 1, "installmentPlans": 1, "installments": 3,
+  "cardPayments": 1, "paymentAllocations": 1, "cardLedgerEntries": 2, "cardStatements": 1,
+  "recurringExpenses": 0 } }
+```
 **POST /cards/:id/reconcile → 201**
 ```json
 // Request: { "reportedBalance": 520000, "asOfDate": "2026-10-02", "reason": "Estado de cuenta del banco" }
@@ -3444,9 +3453,71 @@ Tipos de evento: `INCOME`, `RECURRING_EXPENSE`, `CARD_STATEMENT`, `INSTALLMENT`,
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CardPurgeDto"
+              }
+            }
+          }
+        },
         "responses": {
-          "204": {
-            "description": ""
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "cards"
+        ]
+      }
+    },
+    "/api/v1/cards/{id}/reset": {
+      "post": {
+        "operationId": "CardsController_reset",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CardPurgeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -6264,6 +6335,18 @@ Tipos de evento: `INCOME`, `RECURRING_EXPENSE`, `CARD_STATEMENT`, `INSTALLMENT`,
             ]
           }
         }
+      },
+      "CardPurgeDto": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "reason"
+        ]
       },
       "ReconcileCardDto": {
         "type": "object",

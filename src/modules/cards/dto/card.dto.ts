@@ -236,3 +236,12 @@ export class ListCardLedgerQueryDto {
   @IsString({ message: 'cursor debe ser texto' })
   cursor?: string;
 }
+
+/** Motivo obligatorio para reiniciar o eliminar una tarjeta con su historial. */
+export class CardPurgeDto {
+  @Transform(trim)
+  @IsString({ message: 'reason debe ser texto' })
+  @IsNotEmpty({ message: 'reason es obligatorio' })
+  @MaxLength(300, { message: 'reason no debe exceder 300 caracteres' })
+  reason!: string;
+}

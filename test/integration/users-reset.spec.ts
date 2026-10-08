@@ -197,6 +197,18 @@ describe('Restablecimiento de datos financieros (integracion)', () => {
         schedule: { frequency: 'MONTHLY', config: { day: 1 }, startDate: today },
       })
       .expect(201);
+    // Recurrente ligado a la tarjeta: no puede sobrevivir al reset de tarjetas.
+    await request(app.getHttpServer())
+      .post('/api/v1/recurring-expenses')
+      .set(...authHeader(user.accessToken))
+      .send({
+        name: 'Suscripcion tarjeta',
+        amount: 20000,
+        paymentMethod: 'CREDIT_CARD',
+        creditCardId: card.id,
+        schedule: { frequency: 'MONTHLY', config: { day: 1 }, startDate: today },
+      })
+      .expect(201);
     await request(app.getHttpServer())
       .post('/api/v1/income/sources')
       .set(...authHeader(user.accessToken))
@@ -254,6 +266,7 @@ describe('Restablecimiento de datos financieros (integracion)', () => {
       installmentPlans: 1,
       installments: 3,
       cardPayments: 1,
+      recurringExpenses: 1,
     });
     expect(reset.body.deleted.paymentAllocations).toBeGreaterThan(0);
     expect(reset.body.deleted.cardLedgerEntries).toBeGreaterThanOrEqual(2);
@@ -263,10 +276,13 @@ describe('Restablecimiento de datos financieros (integracion)', () => {
     expect(await list(user.accessToken, '/api/v1/purchases')).toHaveLength(0);
     expect(await list(user.accessToken, '/api/v1/card-payments')).toHaveLength(0);
 
-    // Efectivo, ingresos y recurrentes intactos, incluido el movimiento del pago.
+    // Efectivo, ingresos y recurrentes de efectivo intactos, incluido el
+    // movimiento del pago; el recurrente ligado a la tarjeta se fue con ella.
     expect(await list(user.accessToken, '/api/v1/cash-accounts')).toHaveLength(1);
     expect(await list(user.accessToken, '/api/v1/expenses')).toHaveLength(1);
-    expect(await list(user.accessToken, '/api/v1/recurring-expenses')).toHaveLength(1);
+    const recurringLeft = await list(user.accessToken, '/api/v1/recurring-expenses');
+    expect(recurringLeft).toHaveLength(1);
+    expect(recurringLeft[0].name).toBe('Renta');
     expect(await list(user.accessToken, '/api/v1/income/sources')).toHaveLength(1);
 
     const movementsAfter = await list(user.accessToken, '/api/v1/cash-movements');

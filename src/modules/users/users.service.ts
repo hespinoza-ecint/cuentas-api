@@ -209,8 +209,10 @@ export class UsersService {
    *   de auditoria con los conteos eliminados).
    * - `CARDS`: solo el dominio de tarjetas (tarjetas, libro, cortes, pagos,
    *   asignaciones, compras, planes y mensualidades). El efectivo, los ingresos,
-   *   los gastos, los recurrentes y la auditoria se conservan; tambien los
-   *   movimientos de efectivo de los pagos de tarjeta.
+   *   los gastos y la auditoria se conservan; tambien los movimientos de
+   *   efectivo de los pagos de tarjeta. Los recurrentes de efectivo se
+   *   conservan; los ligados a una tarjeta se van con ella porque no pueden
+   *   existir sin tarjeta.
    * Solo se permite con la contrasena actual.
    */
   async resetData(
@@ -248,6 +250,18 @@ export class UsersService {
         tx.cardLedgerEntry.deleteMany({ where: { userId } }),
       );
       await wipe('cardStatements', () => tx.cardStatement.deleteMany({ where: { userId } }));
+
+      // Los recurrentes configurados con tarjeta no sobreviven al borrado de
+      // las tarjetas (FK Restrict); con CARDS solo se van esos.
+      await wipe('recurringExpenses', () =>
+        tx.recurringExpense.deleteMany({
+          where: {
+            userId,
+            ...(scope === 'CARDS' ? { creditCardId: { not: null } } : {}),
+          },
+        }),
+      );
+
       await wipe('creditCards', () => tx.creditCard.deleteMany({ where: { userId } }));
 
       if (scope === 'ALL') {
@@ -258,9 +272,6 @@ export class UsersService {
         await wipe('cashMovements', () => tx.cashMovement.deleteMany({ where: { userId } }));
         await wipe('incomeSchedules', () => tx.incomeSchedule.deleteMany({ where: { userId } }));
         await wipe('incomeSources', () => tx.incomeSource.deleteMany({ where: { userId } }));
-        await wipe('recurringExpenses', () =>
-          tx.recurringExpense.deleteMany({ where: { userId } }),
-        );
         await wipe('cashAccounts', () => tx.cashAccount.deleteMany({ where: { userId } }));
         await wipe('recommendations', () =>
           tx.recommendationHistory.deleteMany({ where: { userId } }),

@@ -13,7 +13,9 @@ Dos alcances con `scope`:
 - `ALL` (default): borra todo lo que la app lleva por el usuario.
 - `CARDS`: borra **solo el dominio de tarjetas** (tarjetas, libro, cortes, pagos,
   asignaciones, compras, planes y mensualidades) y conserva efectivo, ingresos,
-  gastos, recurrentes, auditoría y los movimientos de efectivo de los pagos.
+  gastos, auditoría y los movimientos de efectivo de los pagos. Los recurrentes
+  de efectivo se conservan; los configurados con una tarjeta se van con ella
+  (no pueden existir sin tarjeta, FK `Restrict`).
 
 Requiere la **contraseña actual** (`400 INVALID_PASSWORD` si no coincide) y corre
 en una sola transacción. Con `ALL` borra, en orden hijos → padres (para respetar

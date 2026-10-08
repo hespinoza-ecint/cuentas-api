@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { CreditCard } from '@prisma/client';
+import { CreditCard, Prisma } from '@prisma/client';
 import {
   BadRequestError,
   NotFoundError,
@@ -12,11 +12,29 @@ import { AuditService } from '../audit/audit.service';
 import { CardLedgerService } from '../card-ledger/card-ledger.service';
 import { FinancialDatePolicy } from '../ledger/financial-date.policy';
 import {
+  CardPurgeDto,
   CreateCardDto,
   ReconcileCardDto,
   UpdateCardDto,
 } from './dto/card.dto';
 import { CardsRepository } from './repositories/cards.repository';
+
+/** Conteos de lo borrado al reiniciar o eliminar una tarjeta (RN-28). */
+export interface CardPurgeCounts {
+  purchases: number;
+  installmentPlans: number;
+  installments: number;
+  cardPayments: number;
+  paymentAllocations: number;
+  cardLedgerEntries: number;
+  cardStatements: number;
+  recurringExpenses: number;
+}
+
+export interface CardPurgeResult {
+  message: string;
+  deleted: CardPurgeCounts;
+}
 
 @Injectable()
 export class CardsService {
@@ -185,26 +203,148 @@ export class CardsService {
     return updated;
   }
 
-  async remove(userId: string, id: string, meta: RequestMeta): Promise<void> {
+  /**
+   * RN-28: reinicia una tarjeta borrando todo su dominio (libro, cortes, pagos,
+   * compras, planes y mensualidades) y la deja como nueva: saldo 0 y credito
+   * completo. Conserva los movimientos de efectivo de los pagos (el dinero ya
+   * salio) y los recurrentes, porque la tarjeta sigue existiendo.
+   */
+  async reset(
+    userId: string,
+    id: string,
+    dto: CardPurgeDto,
+    meta: RequestMeta,
+  ): Promise<CardPurgeResult> {
     const card = await this.get(userId, id);
 
-    if (card.currentBalance !== 0) {
-      throw new UnprocessableEntityError(
-        'La tarjeta tiene saldo pendiente. Liquídala antes de eliminarla.',
-        { reason: 'CARD_WITH_BALANCE' },
+    const deleted = await this.prisma.$transaction(async (tx) => {
+      const counts = await this.purgeDomain(tx, userId, card.id);
+
+      await tx.creditCard.update({
+        where: { id: card.id },
+        data: {
+          currentBalance: 0,
+          availableCredit: card.creditLimit,
+          balanceVersion: { increment: 1 },
+        },
+      });
+
+      await this.audit.record(
+        {
+          action: 'credit_card.reset',
+          entityType: 'CreditCard',
+          entityId: card.id,
+          userId,
+          actorUserId: userId,
+          changes: { alias: card.alias, deleted: counts, reason: dto.reason },
+          ...meta,
+        },
+        tx,
       );
-    }
 
-    await this.cards.update(id, { deletedAt: new Date(), status: 'INACTIVE' });
-
-    await this.audit.record({
-      action: 'credit_card.deleted',
-      entityType: 'CreditCard',
-      entityId: id,
-      userId,
-      actorUserId: userId,
-      ...meta,
+      return counts;
     });
+
+    return {
+      message: `La tarjeta "${card.alias}" quedo como nueva: saldo $0 y credito completo.`,
+      deleted,
+    };
+  }
+
+  /**
+   * RN-28: elimina la tarjeta y todo su dominio. Los movimientos de efectivo
+   * de los pagos ya hechos no se tocan; los gastos recurrentes configurados con
+   * la tarjeta se van con ella (FK Restrict y no pueden existir sin tarjeta).
+   */
+  async remove(
+    userId: string,
+    id: string,
+    dto: CardPurgeDto,
+    meta: RequestMeta,
+  ): Promise<CardPurgeResult> {
+    const card = await this.get(userId, id);
+
+    const deleted = await this.prisma.$transaction(async (tx) => {
+      const counts = await this.purgeDomain(tx, userId, card.id);
+
+      const recurring = await tx.recurringExpense.deleteMany({
+        where: { userId, creditCardId: card.id },
+      });
+      counts.recurringExpenses = recurring.count;
+
+      await tx.creditCard.delete({ where: { id: card.id } });
+
+      await this.audit.record(
+        {
+          action: 'credit_card.deleted',
+          entityType: 'CreditCard',
+          entityId: card.id,
+          userId,
+          actorUserId: userId,
+          changes: { alias: card.alias, deleted: counts, reason: dto.reason },
+          ...meta,
+        },
+        tx,
+      );
+
+      return counts;
+    });
+
+    return {
+      message: `La tarjeta "${card.alias}" y todo su historial fueron eliminados.`,
+      deleted,
+    };
+  }
+
+  /** Borra el dominio de una tarjeta (hijos -> padres por las FK Restrict). */
+  private async purgeDomain(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    cardId: string,
+  ): Promise<CardPurgeCounts> {
+    const deleted: CardPurgeCounts = {
+      purchases: 0,
+      installmentPlans: 0,
+      installments: 0,
+      cardPayments: 0,
+      paymentAllocations: 0,
+      cardLedgerEntries: 0,
+      cardStatements: 0,
+      recurringExpenses: 0,
+    };
+
+    const wipe = async (
+      key: keyof CardPurgeCounts,
+      run: () => Promise<{ count: number }>,
+    ) => {
+      deleted[key] = (await run()).count;
+    };
+
+    await wipe('paymentAllocations', () =>
+      tx.paymentAllocation.deleteMany({
+        where: { userId, cardPayment: { creditCardId: cardId } },
+      }),
+    );
+    await wipe('installments', () =>
+      tx.installment.deleteMany({ where: { userId, plan: { creditCardId: cardId } } }),
+    );
+    await wipe('cardPayments', () =>
+      tx.cardPayment.deleteMany({ where: { userId, creditCardId: cardId } }),
+    );
+    await wipe('installmentPlans', () =>
+      tx.installmentPlan.deleteMany({ where: { userId, creditCardId: cardId } }),
+    );
+    await wipe('purchases', () =>
+      tx.purchase.deleteMany({ where: { userId, creditCardId: cardId } }),
+    );
+    await wipe('cardLedgerEntries', () =>
+      tx.cardLedgerEntry.deleteMany({ where: { userId, creditCardId: cardId } }),
+    );
+    await wipe('cardStatements', () =>
+      tx.cardStatement.deleteMany({ where: { userId, creditCardId: cardId } }),
+    );
+
+    return deleted;
   }
 
   /**

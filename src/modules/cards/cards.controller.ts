@@ -3,7 +3,6 @@ import {
   Controller,
   Delete,
   Get,
-  HttpCode,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -19,6 +18,7 @@ import { RequireVerifiedEmail } from '../../common/auth/require-verified-email.d
 import { requestMeta } from '../../common/http/request-meta';
 import { CardsService } from './cards.service';
 import {
+  CardPurgeDto,
   CreateCardDto,
   ListCardLedgerQueryDto,
   ReconcileCardDto,
@@ -69,15 +69,28 @@ export class CardsController {
     return this.cardsService.update(user.id, id, dto, requestMeta(request));
   }
 
-  @Delete(':id')
-  @HttpCode(204)
+  /** RN-28: reinicia la tarjeta (borra su historial y la deja como nueva). */
+  @Post(':id/reset')
   @RequireVerifiedEmail()
-  async remove(
+  reset(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CardPurgeDto,
     @Req() request: FastifyRequest,
-  ): Promise<void> {
-    await this.cardsService.remove(user.id, id, requestMeta(request));
+  ) {
+    return this.cardsService.reset(user.id, id, dto, requestMeta(request));
+  }
+
+  /** RN-28: elimina la tarjeta y todo su historial. */
+  @Delete(':id')
+  @RequireVerifiedEmail()
+  remove(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CardPurgeDto,
+    @Req() request: FastifyRequest,
+  ) {
+    return this.cardsService.remove(user.id, id, dto, requestMeta(request));
   }
 
   @Post(':id/reconcile')
