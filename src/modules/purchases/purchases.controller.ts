@@ -62,7 +62,7 @@ export class PurchasesController {
     return this.purchasesService.cancel(user.id, id, dto, requestMeta(request));
   }
 
-  /** RN-27: elimina la compra con plan y revierte lo pendiente en la tarjeta. */
+  /** RN-27: elimina la compra y revierte en la tarjeta lo que aun pesa. */
   @Delete(':id')
   @RequireVerifiedEmail()
   remove(

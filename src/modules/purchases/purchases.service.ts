@@ -482,10 +482,11 @@ export class PurchasesService {
   }
 
   /**
-   * RN-27: eliminar una compra con plan (MSI o diferida) aunque ya tenga
-   * mensualidades pagadas. Revierte en la tarjeta solo lo que la compra aun
-   * pesa (cargo original menos pagos aplicados), cancela lo pendiente y borra
-   * el registro. Lo ya pagado no se modifica.
+   * RN-27: eliminar una compra (con o sin plan) y ajustar la tarjeta. Con plan
+   * se revierte el cargo pendiente (cargo original menos pagos y anticipos
+   * aplicados); en las regulares los pagos van a cortes completos, asi que se
+   * revierte el cargo hasta donde alcance la deuda viva. Borra el registro y
+   * audita; lo ya pagado no se modifica.
    */
   async remove(
     userId: string,
@@ -499,38 +500,47 @@ export class PurchasesService {
     }
 
     const plan = purchase.installmentPlan;
-    if (!plan) {
-      throw new UnprocessableEntityError(
-        'Solo las compras a meses o diferidas se pueden eliminar; una compra regular se cancela.',
-        { reason: 'DELETE_REQUIRES_PLAN' },
-      );
-    }
-
     const today = await this.datePolicy.today(userId);
 
     const result = await this.prisma.$transaction(async (tx) => {
-      // Cargo original de la compra en el libro de la tarjeta (principal).
-      const charge = await tx.cardLedgerEntry.findFirst({
-        where: {
-          userId,
-          type: 'PURCHASE',
-          sourceType: 'InstallmentPlan',
-          sourceId: purchase.id,
-        },
-        select: { amount: true },
-      });
+      let refundedPrincipal: number;
+      let paidAmount = 0;
 
-      // Pagos y anticipos ya aplicados a las mensualidades de este plan.
-      const paid = await tx.paymentAllocation.aggregate({
-        where: { userId, installment: { planId: plan.id } },
-        _sum: { amount: true },
-      });
+      if (purchase.status === 'CANCELLED' || purchase.status === 'REFUNDED') {
+        // Una cancelacion previa ya reverso el cargo: solo se borra el registro.
+        refundedPrincipal = 0;
+      } else if (plan) {
+        // Cargo original de la compra en el libro de la tarjeta (principal).
+        const charge = await tx.cardLedgerEntry.findFirst({
+          where: {
+            userId,
+            type: 'PURCHASE',
+            sourceType: 'InstallmentPlan',
+            sourceId: purchase.id,
+          },
+          select: { amount: true },
+        });
 
-      const chargedAmount = charge?.amount ?? outstandingPrincipalOf(plan.installments);
-      const paidAmount = paid._sum.amount ?? 0;
-      // Si el plan ya se habia cancelado (con su reverso), no se repite.
-      const refundedPrincipal =
-        plan.status === 'CANCELLED' ? 0 : Math.max(chargedAmount - paidAmount, 0);
+        // Pagos y anticipos ya aplicados a las mensualidades de este plan.
+        const paid = await tx.paymentAllocation.aggregate({
+          where: { userId, installment: { planId: plan.id } },
+          _sum: { amount: true },
+        });
+
+        const chargedAmount = charge?.amount ?? outstandingPrincipalOf(plan.installments);
+        paidAmount = paid._sum.amount ?? 0;
+        // Si el plan ya se habia cancelado (con su reverso), no se repite.
+        refundedPrincipal =
+          plan.status === 'CANCELLED' ? 0 : Math.max(chargedAmount - paidAmount, 0);
+      } else {
+        // Regular: se revierte el cargo hasta donde alcance la deuda viva de la
+        // tarjeta (nunca genera saldo a favor por si ya estaba pagada).
+        const card = await tx.creditCard.findFirst({
+          where: { id: purchase.creditCardId, userId, deletedAt: null },
+          select: { currentBalance: true },
+        });
+        refundedPrincipal = Math.min(purchase.amount, Math.max(card?.currentBalance ?? 0, 0));
+      }
 
       if (refundedPrincipal > 0) {
         await this.cardLedger.postEntry(
@@ -565,7 +575,7 @@ export class PurchasesService {
             description: purchase.description,
             amount: purchase.amount,
             type: purchase.type,
-            months: plan.months,
+            months: plan?.months ?? null,
             refundedPrincipal,
             paidAmount,
             reason: dto.reason,

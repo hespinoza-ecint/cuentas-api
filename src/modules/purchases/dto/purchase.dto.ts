@@ -127,7 +127,7 @@ export class CancelPurchaseDto {
   reason!: string;
 }
 
-/** Eliminacion definitiva de una compra con plan (MSI o diferida). */
+/** Eliminacion definitiva de una compra (regular, MSI o diferida). */
 export class DeletePurchaseDto {
   @IsString({ message: 'reason debe ser texto' })
   @IsNotEmpty({ message: 'reason es obligatorio' })

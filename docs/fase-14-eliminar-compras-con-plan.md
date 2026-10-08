@@ -2,10 +2,10 @@
 
 ## 1. Objetivo
 
-Poder **borrar del historial** una compra a meses sin intereses (o diferida) que
-ya tiene mensualidades pagadas, algo que hasta ahora bloqueaba la cancelación
-normal (`422 PLAN_HAS_PAYMENTS`), ajustando lo necesario en la tarjeta **sin
-tocar el dinero que ya salió**.
+Poder **borrar del historial** una compra —a meses, diferida o regular— que ya
+tiene mensualidades pagadas (antes bloqueadas con `422 PLAN_HAS_PAYMENTS`) o que
+simplemente se quiere quitar, ajustando lo necesario en la tarjeta **sin tocar
+el dinero que ya salió**.
 
 ## 2. La operación
 
@@ -13,11 +13,20 @@ tocar el dinero que ya salió**.
 
 | Pieza | Qué pasa |
 |---|---|
-| Libro de la tarjeta | Entrada `REFUND` por el **cargo pendiente** = cargo original de la compra − pagos/anticipos aplicados a sus mensualidades. El saldo baja y se libera crédito |
+| Libro de la tarjeta | Entrada `REFUND` por el **cargo vivo** de la compra (ver fórmula por tipo). El saldo baja y se libera crédito |
 | Mensualidades pendientes | Se eliminan con el plan: el usuario ya no las debe |
 | Pagos y efectivo ya hechos | **No se tocan.** Los movimientos de efectivo quedan como están y los estados de cuenta se recalculan del libro al consultarse |
 | Registro | Se borra la compra y, en cascada, su plan y mensualidades. Las asignaciones de pago conservan su monto (solo pierden la liga a la mensualidad eliminada) |
 | Auditoría | `purchase.deleted` con el snapshot (monto, meses, revertido, pagado, motivo) |
+
+Fórmula del reverso:
+
+- **Con plan (MSI/diferida):** `cargo original − pagos y anticipos aplicados`.
+  Si el plan ya estaba cancelado, no hay doble reverso.
+- **Regular:** los pagos se aplican a **cortes completos**, no a compras
+  individuales, así que se revierte `min(monto, deuda viva de la tarjeta)`.
+  Nunca genera saldo a favor: una compra ya pagada solo desaparece del historial.
+- **Cancelada o devuelta antes:** `0` (la cancelación previa ya revirtió el cargo).
 
 Casos verificados:
 
@@ -27,14 +36,13 @@ Casos verificados:
   dinero ya se pagó en la vida real).
 - **Al corriente** (`firstStatementMonth`): el cargo original fue el principal
   pendiente, así que se revierte exactamente eso (sin recalcular de más).
-- **Ya cancelada antes:** el plan `CANCELLED` no se revierte otra vez (cero).
+- **Regular sin pagar:** se revierte el monto completo.
+- **Regular ya pagada:** `refundedPrincipal = 0`, el saldo no se mueve.
 
 Restricciones:
 
-- Solo compras **con plan** (`MSI` / `DEFERRED_INTEREST`). Las regulares se
-  siguen cancelando con `POST /purchases/:id/cancel` → `422 DELETE_REQUIRES_PLAN`.
-- Aislamiento por usuario: la compra de otro usuario responde `404`.
 - Motivo obligatorio (mismo `ReasonDialog` que el resto de operaciones).
+- Aislamiento por usuario: la compra de otro usuario responde `404`.
 
 ## 3. Cambios
 
@@ -42,22 +50,24 @@ Restricciones:
 |---|---|
 | `dto/purchase.dto.ts` | `DeletePurchaseDto` (motivo obligatorio, 300 máx) |
 | `repositories/purchases.repository.ts` | `findRawWithInstallments` (compra + plan + mensualidades) |
-| `purchases.service.ts` | `remove()`: fórmula del reverso, `REFUND`, borrado en cascada y auditoría |
+| `purchases.service.ts` | `remove()`: fórmula del reverso por tipo, `REFUND`, borrado en cascada y auditoría |
 | `purchases.controller.ts` | `DELETE /purchases/:id` con `@RequireVerifiedEmail()` |
 
 ## 4. Pruebas
 
-`test/integration/purchases.spec.ts` — 4 casos nuevos (`RN-27`):
+`test/integration/purchases.spec.ts` — 6 casos `RN-27`:
 
 ```powershell
-npx.cmd jest test/integration/purchases.spec.ts   # 15 pruebas en total
+npx.cmd jest test/integration/purchases.spec.ts   # 17 pruebas en total
 ```
 
-- elimina con pagos y revierte lo pendiente (tarjeta a 0, efectivo pagado intacto,
+- MSI con pagos: revierte lo pendiente (tarjeta a 0, efectivo pagado intacto,
   cortes siguen respondiendo);
-- liquidada: no toca el saldo;
-- al corriente: revierte exactamente el principal pendiente;
-- regulares rechazadas (422) y aislamiento entre usuarios (404).
+- MSI liquidada: no toca el saldo;
+- MSI al corriente: revierte exactamente el principal pendiente;
+- regular sin pagar: revierte el cargo vivo;
+- regular ya pagada: `refundedPrincipal = 0` (sin saldo a favor);
+- aislamiento entre usuarios (404).
 
 ## 5. Compatibilidad
 
