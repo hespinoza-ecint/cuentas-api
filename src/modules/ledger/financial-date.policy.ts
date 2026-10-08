@@ -23,22 +23,43 @@ export class FinancialDatePolicy {
   }
 
   async assertAllowed(userId: string, occurredOn: string): Promise<void> {
-    const settings = await this.prisma.userSettings.findUnique({ where: { userId } });
-    const timeZone = settings?.timezone ?? 'America/Mexico_City';
-    const backdateLimit = settings?.backdateLimitDays ?? 60;
-    const today = this.clock.today(timeZone);
-
-    if (compareLocalDates(occurredOn, today) > 0) {
-      throw new UnprocessableEntityError(
-        'No se pueden registrar movimientos con fecha futura. Los flujos futuros se capturan como ingresos o gastos programados.',
-        { reason: 'FUTURE_DATE_NOT_ALLOWED' },
-      );
-    }
+    const { backdateLimit, today } = await this.userContext(userId);
+    this.assertNotFutureDate(occurredOn, today);
 
     if (daysBetween(occurredOn, today) > backdateLimit) {
       throw new UnprocessableEntityError(
         `La fecha excede el limite de ${backdateLimit} dias hacia atras.`,
         { reason: 'BACKDATE_LIMIT_EXCEEDED' },
+      );
+    }
+  }
+
+  /**
+   * Solo bloquea fechas futuras. Lo usan las compensaciones internas (p. ej.
+   * eliminar una compra) que deben caer en su periodo original para que los
+   * cortes ya cerrados se recalculen.
+   */
+  async assertNotFuture(userId: string, occurredOn: string): Promise<void> {
+    const { today } = await this.userContext(userId);
+    this.assertNotFutureDate(occurredOn, today);
+  }
+
+  private async userContext(
+    userId: string,
+  ): Promise<{ backdateLimit: number; today: string }> {
+    const settings = await this.prisma.userSettings.findUnique({ where: { userId } });
+    const timeZone = settings?.timezone ?? 'America/Mexico_City';
+    return {
+      backdateLimit: settings?.backdateLimitDays ?? 60,
+      today: this.clock.today(timeZone),
+    };
+  }
+
+  private assertNotFutureDate(occurredOn: string, today: string): void {
+    if (compareLocalDates(occurredOn, today) > 0) {
+      throw new UnprocessableEntityError(
+        'No se pueden registrar movimientos con fecha futura. Los flujos futuros se capturan como ingresos o gastos programados.',
+        { reason: 'FUTURE_DATE_NOT_ALLOWED' },
       );
     }
   }

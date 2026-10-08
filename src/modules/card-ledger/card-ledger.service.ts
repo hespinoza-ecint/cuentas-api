@@ -21,6 +21,12 @@ export interface PostCardEntryInput {
   statementId?: string;
   reversesEntryId?: string;
   createdById: string;
+  /**
+   * Solo compensaciones internas (p. ej. eliminar una compra): permite fechar
+   * el movimiento en su periodo original para que los cortes ya cerrados se
+   * recalculen. Sigue bloqueando fechas futuras.
+   */
+  allowBackdated?: boolean;
 }
 
 type PrismaClientLike = Prisma.TransactionClient | PrismaService;
@@ -58,7 +64,11 @@ export class CardLedgerService {
       throw new UnprocessableEntityError('La tarjeta esta inactiva.', { reason: 'CARD_INACTIVE' });
     }
 
-    await this.datePolicy.assertAllowed(input.userId, input.occurredOn);
+    if (input.allowBackdated) {
+      await this.datePolicy.assertNotFuture(input.userId, input.occurredOn);
+    } else {
+      await this.datePolicy.assertAllowed(input.userId, input.occurredOn);
+    }
 
     const entry = await client.cardLedgerEntry.create({
       data: {

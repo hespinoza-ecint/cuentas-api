@@ -500,27 +500,25 @@ export class PurchasesService {
     }
 
     const plan = purchase.installmentPlan;
-    const today = await this.datePolicy.today(userId);
 
     const result = await this.prisma.$transaction(async (tx) => {
       let refundedPrincipal: number;
       let paidAmount = 0;
 
+      // Cargo original de la compra en el libro de la tarjeta.
+      const charge = await tx.cardLedgerEntry.findFirst({
+        where: { userId, type: 'PURCHASE', sourceId: purchase.id },
+        select: { amount: true, occurredOn: true },
+      });
+      // El ajuste se fecha en el periodo original del cargo: si la compra ya
+      // esta dentro de un corte cerrado, el corte se recalcula (una entrada
+      // fechada hoy no lo toca).
+      const occurredOn = charge?.occurredOn ?? purchase.purchaseDate;
+
       if (purchase.status === 'CANCELLED' || purchase.status === 'REFUNDED') {
         // Una cancelacion previa ya reverso el cargo: solo se borra el registro.
         refundedPrincipal = 0;
       } else if (plan) {
-        // Cargo original de la compra en el libro de la tarjeta (principal).
-        const charge = await tx.cardLedgerEntry.findFirst({
-          where: {
-            userId,
-            type: 'PURCHASE',
-            sourceType: 'InstallmentPlan',
-            sourceId: purchase.id,
-          },
-          select: { amount: true },
-        });
-
         // Pagos y anticipos ya aplicados a las mensualidades de este plan.
         const paid = await tx.paymentAllocation.aggregate({
           where: { userId, installment: { planId: plan.id } },
@@ -549,11 +547,15 @@ export class PurchasesService {
             creditCardId: purchase.creditCardId,
             type: 'REFUND',
             amount: -refundedPrincipal,
-            occurredOn: today,
+            occurredOn,
             description: `Eliminacion: ${purchase.description}`,
-            sourceType: 'PurchaseDeletion',
+            // El reverso imita el origen del cargo: en las regulares el cargo
+            // vive en los cargos del periodo y el reverso debe restarlos; en
+            // los planes lo exigible se ajusta por las mensualidades.
+            sourceType: plan ? 'InstallmentPlan' : 'Purchase',
             sourceId: purchase.id,
             createdById: userId,
+            allowBackdated: true,
           },
           tx,
         );

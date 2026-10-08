@@ -28,6 +28,14 @@ Fórmula del reverso:
   Nunca genera saldo a favor: una compra ya pagada solo desaparece del historial.
 - **Cancelada o devuelta antes:** `0` (la cancelación previa ya revirtió el cargo).
 
+**El ajuste se fecha en el periodo original del cargo**, no hoy: así los cortes
+ya cerrados que incluían la compra se recalculan al consultarlos y dejan de
+exigir el pago. Es una compensación interna, por eso puede quedar antes del
+límite de días hacia atrás (`allowBackdated` en el libro de la tarjeta); nunca
+en el futuro. En las compras regulares, además, la devolución **resta de los
+cargos del periodo** del corte (`statements.service`), porque su cargo original
+vive ahí y no en las mensualidades.
+
 Casos verificados:
 
 - **Liquidada por completo:** cargo pendiente = 0 → solo se quita del historial;
@@ -55,10 +63,10 @@ Restricciones:
 
 ## 4. Pruebas
 
-`test/integration/purchases.spec.ts` — 6 casos `RN-27`:
+`test/integration/purchases.spec.ts` — 9 casos `RN-27`:
 
 ```powershell
-npx.cmd jest test/integration/purchases.spec.ts   # 17 pruebas en total
+npx.cmd jest test/integration/purchases.spec.ts   # 20 pruebas en total
 ```
 
 - MSI con pagos: revierte lo pendiente (tarjeta a 0, efectivo pagado intacto,
@@ -67,6 +75,10 @@ npx.cmd jest test/integration/purchases.spec.ts   # 17 pruebas en total
 - MSI al corriente: revierte exactamente el principal pendiente;
 - regular sin pagar: revierte el cargo vivo;
 - regular ya pagada: `refundedPrincipal = 0` (sin saldo a favor);
+- **compra regular dentro de un corte ya cerrado: el corte recalcula
+  `statementBalance`, `cycleCharges` y `noInterestPaymentCalc` a 0**;
+- **compra MSI dentro de un corte ya cerrado: el corte recalcula igual**;
+- **el ajuste no depende del límite de días hacia atrás** (compensación interna);
 - aislamiento entre usuarios (404).
 
 ## 5. Compatibilidad

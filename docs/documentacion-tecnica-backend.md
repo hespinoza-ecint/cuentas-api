@@ -1251,7 +1251,7 @@ Los días que no existen en un mes se ajustan al último día. Las fechas se aju
 | RN-24 | Anualidad como cargo/obligación futura | Obligación `Anualidad {alias}` en recomendaciones |
 | RN-25 | Gasto = efectivo/débito; compra = tarjeta | `Expenses` vs `Purchases` |
 | RN-26 | Errores/cancelaciones se corrigen con reverso | `reverse` en movimientos/gastos/pagos; cancelación de compra con `REFUND` |
-| RN-27 | Eliminar una compra (regular, MSI o diferida) revierte en la tarjeta el cargo vivo —con plan: cargo original − pagos aplicados; regular: hasta la deuda actual— y borra el registro; lo ya pagado no se toca | `PurchasesService.remove` (entrada `REFUND` con `sourceType = PurchaseDeletion`, auditoría `purchase.deleted`) |
+| RN-27 | Eliminar una compra (regular, MSI o diferida) revierte en la tarjeta el cargo vivo —con plan: cargo original − pagos aplicados; regular: hasta la deuda actual— fechado en el periodo original para que los cortes ya cerrados se recalculen, y borra el registro; lo ya pagado no se toca | `PurchasesService.remove` (entrada `REFUND` con `allowBackdated`, auditoría `purchase.deleted`); en regulares resta de los cargos del periodo (`statements.service`) |
 
 | Recurrente con tarjeta se confirma como compra | `paymentMethod = CREDIT_CARD` crea `Purchase` REGULAR + entrada `PURCHASE`; efectivo crea `Expense` + movimiento | `PAYMENT_METHOD_REQUIRED`, `CREDIT_CARD_REQUIRED`, `CARD_NOT_FOUND`, `CARD_INACTIVE` |
 | Una ocurrencia se confirma una sola vez | Único `(recurringExpenseId, occurrenceDate)` en Expense y Purchase | `OCCURRENCE_ALREADY_CONFIRMED` |
@@ -1964,7 +1964,7 @@ Errores: `400 MONTHS_REQUIRED`, `400 MSI_WITH_RATE`, `400 RATE_REQUIRED`, `400 S
 
 **POST /purchases/:id/cancel → 201** · `{ "reason": "Devolución completa" }` → compra `CANCELLED`, plan `CANCELLED`, mensualidades `CANCELLED`, entrada `REFUND` que restaura el crédito. Errores: `409 PURCHASE_NOT_ACTIVE`, `422 PLAN_HAS_PAYMENTS`.
 
-**DELETE /purchases/:id → 200** · `{ "reason": "Registrada por error" }` → elimina la compra aunque tenga mensualidades pagadas o sea regular. Revierte en el libro de la tarjeta el cargo vivo y borra la compra (con su plan y mensualidades en cascada si los tiene), registrando `purchase.deleted` en auditoría:
+**DELETE /purchases/:id → 200** · `{ "reason": "Registrada por error" }` → elimina la compra aunque tenga mensualidades pagadas o sea regular. Revierte en el libro de la tarjeta el cargo vivo **fechado en el periodo original del cargo** (compensación interna `allowBackdated`, no depende del límite de días hacia atrás) y borra la compra (con su plan y mensualidades en cascada si los tiene), registrando `purchase.deleted` en auditoría. Al recalcularse, los cortes ya cerrados que incluían la compra dejan de exigir su pago:
 
 - **Con plan (MSI/diferida):** `refundedPrincipal = cargo original − pagos/anticipos aplicados`. Si el plan ya estaba cancelado, no hay doble reverso.
 - **Regular:** los pagos se aplican a cortes completos, no a cada compra; se revierte `min(monto, deuda viva de la tarjeta)`, así que una compra ya pagada no genera saldo a favor.

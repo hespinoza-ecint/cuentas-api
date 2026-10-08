@@ -515,6 +515,128 @@ describe('Compras y mensualidades (integracion)', () => {
       .expect(404);
   });
 
+  it('RN-27: eliminar una compra de un corte ya cerrado recalcula el corte', async () => {
+    const user = await createVerifiedUser(app, 'purchase-del-cut');
+    const today = todayInTimeZone('America/Mexico_City');
+    const openingDate = addDays(today, -40);
+    const card = await createCard(app, user.accessToken, {
+      creditLimit: 3000000,
+      cutDay: Number(openingDate.slice(8, 10)),
+      dueDaysAfterCut: 10,
+    });
+    const purchaseDate = addDays(today, -38);
+
+    const regular = await createPurchase(user, {
+      creditCardId: card.id,
+      description: 'Compra en corte cerrado',
+      amount: 10000,
+      purchaseDate,
+      type: 'REGULAR',
+    });
+
+    const before = await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}/statements`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(before.body).toHaveLength(1);
+    expect(before.body[0].statementBalance).toBe(10000);
+    expect(before.body[0].cycleCharges).toBe(10000);
+    expect(before.body[0].noInterestPaymentCalc).toBe(10000);
+
+    const removed = await request(app.getHttpServer())
+      .delete(`/api/v1/purchases/${regular.id}`)
+      .set(...authHeader(user.accessToken))
+      .send({ reason: 'Compra duplicada' })
+      .expect(200);
+    expect(removed.body.refundedPrincipal).toBe(10000);
+
+    // El corte ya cerrado se recalcula del libro: deja de pedir el pago.
+    const after = await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}/statements`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(after.body[0].statementBalance).toBe(0);
+    expect(after.body[0].cycleCharges).toBe(0);
+    expect(after.body[0].noInterestPaymentCalc).toBe(0);
+
+    const cardAfter = await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(cardAfter.body.currentBalance).toBe(0);
+  });
+
+  it('RN-27: una compra MSI dentro de un corte cerrado tambien lo recalcula', async () => {
+    const user = await createVerifiedUser(app, 'purchase-del-msi-cut');
+    const today = todayInTimeZone('America/Mexico_City');
+    const openingDate = addDays(today, -40);
+    const card = await createCard(app, user.accessToken, {
+      creditLimit: 3000000,
+      cutDay: Number(openingDate.slice(8, 10)),
+      dueDaysAfterCut: 10,
+    });
+    const purchaseDate = addDays(today, -38);
+
+    const purchase = await createPurchase(user, {
+      creditCardId: card.id,
+      description: 'MSI en corte cerrado',
+      amount: 90000,
+      purchaseDate,
+      type: 'MSI',
+      months: 3,
+    });
+
+    const before = await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}/statements`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(before.body[0].statementBalance).toBe(90000);
+    expect(before.body[0].noInterestPaymentCalc).toBe(30000);
+
+    const removed = await request(app.getHttpServer())
+      .delete(`/api/v1/purchases/${purchase.id}`)
+      .set(...authHeader(user.accessToken))
+      .send({ reason: 'Registrada por error' })
+      .expect(200);
+    expect(removed.body.refundedPrincipal).toBe(90000);
+
+    const after = await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}/statements`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(after.body[0].statementBalance).toBe(0);
+    expect(after.body[0].noInterestPaymentCalc).toBe(0);
+  });
+
+  it('RN-27: el ajuste no depende del limite de dias hacia atras', async () => {
+    const user = await createVerifiedUser(app, 'purchase-del-limit');
+    const card = await createCard(app, user.accessToken, { creditLimit: 3000000 });
+    const today = todayInTimeZone('America/Mexico_City');
+
+    const regular = await createPurchase(user, {
+      creditCardId: card.id,
+      description: 'Compra vieja',
+      amount: 10000,
+      purchaseDate: addDays(today, -20),
+      type: 'REGULAR',
+    });
+
+    // Con el limite en 5 dias una fecha de hace 20 se rechazaria de forma
+    // normal; la compensacion interna si puede fechar ahi el ajuste.
+    await request(app.getHttpServer())
+      .patch('/api/v1/users/me/settings')
+      .set(...authHeader(user.accessToken))
+      .send({ backdateLimitDays: 5 })
+      .expect(200);
+
+    const removed = await request(app.getHttpServer())
+      .delete(`/api/v1/purchases/${regular.id}`)
+      .set(...authHeader(user.accessToken))
+      .send({ reason: 'Registrada por error' })
+      .expect(200);
+    expect(removed.body.refundedPrincipal).toBe(10000);
+  });
+
   it('RN-21: anticipos reducen plazo y liquidan el plan', async () => {
     const user = await createVerifiedUser(app, 'purchase-prepay');
     const card = await createCard(app, user.accessToken, { creditLimit: 3000000 });

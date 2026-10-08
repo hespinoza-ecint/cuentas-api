@@ -125,7 +125,10 @@ export class StatementsService {
         .filter((entry) => compareLocalDates(entry.occurredOn, cutDate) <= 0)
         .reduce((total, entry) => total + entry.amount, 0);
 
-      // Cargos regulares del periodo (las compras a meses se cobran por mensualidad).
+      // Cargos regulares del periodo (las compras a meses se cobran por
+      // mensualidad, por eso su cargo y su reverso quedan fuera). La devolucion
+      // de una compra regular eliminada resta aqui: su cargo original vive en
+      // los cargos del periodo, no en las mensualidades.
       const regularCycleCharges = entries
         .filter(
           (entry) =>
@@ -135,9 +138,9 @@ export class StatementsService {
               cutDate,
               card.sameDayCutIncluded,
             ) &&
-            CHARGE_TYPES.has(entry.type) &&
-            entry.amount > 0 &&
-            entry.sourceType !== 'InstallmentPlan',
+            entry.sourceType !== 'InstallmentPlan' &&
+            ((CHARGE_TYPES.has(entry.type) && entry.amount > 0) ||
+              (entry.type === 'REFUND' && entry.sourceType === 'Purchase')),
         )
         .reduce((total, entry) => total + entry.amount, 0);
 
