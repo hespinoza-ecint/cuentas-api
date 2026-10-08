@@ -353,7 +353,8 @@ export class IncomeService {
           rule: schedule.nonBusinessDayRule as NonBusinessDayRule,
           holidays,
           from,
-          limit: 60,
+          // Los horizontes largos (proyeccion de flujo) necesitan mas fechas.
+          limit: Math.min(settings.pendingIncomeGraceDays + days + 30, 2000),
         });
 
         for (const expectedDate of dates) {

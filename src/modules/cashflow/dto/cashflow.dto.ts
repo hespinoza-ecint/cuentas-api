@@ -2,7 +2,11 @@ import { Type } from 'class-transformer';
 import { IsInt, IsOptional, Max, Min } from 'class-validator';
 
 export class ProjectionQueryDto {
-  /** Horizonte de la proyeccion en dias (default 60, maximo 365). */
+  /**
+   * Horizonte de la proyeccion en dias. Si se omite, cubre hasta la ultima
+   * obligacion programada (mensualidades/anualidad), con minimo
+   * `projectionMinDays`; explicito, maximo 365.
+   */
   @IsOptional()
   @Type(() => Number)
   @IsInt({ message: 'days debe ser un entero' })

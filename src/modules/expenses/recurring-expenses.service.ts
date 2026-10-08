@@ -228,7 +228,8 @@ export class RecurringExpensesService {
         rule: recurrence.nonBusinessDayRule as NonBusinessDayRule,
         holidays,
         from,
-        limit: 180,
+        // Los horizontes largos (proyeccion de flujo) necesitan mas fechas.
+        limit: Math.min(settings.backdateLimitDays + days + 30, 2000),
       });
 
       if (dates.length === 0) {

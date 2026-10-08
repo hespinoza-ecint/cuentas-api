@@ -1221,7 +1221,7 @@ Los días que no existen en un mes se ajustan al último día. Las fechas se aju
 
 # 7. Reglas de Negocio
 
-## 7.1 Reglas formales RN-01 a RN-28 (todas implementadas)
+## 7.1 Reglas formales RN-01 a RN-29 (todas implementadas)
 
 | ID | Regla | Dónde vive |
 |---|---|---|
@@ -1253,6 +1253,7 @@ Los días que no existen en un mes se ajustan al último día. Las fechas se aju
 | RN-26 | Errores/cancelaciones se corrigen con reverso | `reverse` en movimientos/gastos/pagos; cancelación de compra con `REFUND` |
 | RN-27 | Eliminar una compra (regular, MSI o diferida) revierte en la tarjeta el cargo vivo —con plan: cargo original − pagos aplicados; regular: hasta la deuda actual— fechado en el periodo original para que los cortes ya cerrados se recalculen, y borra el registro; lo ya pagado no se toca | `PurchasesService.remove` (entrada `REFUND` con `allowBackdated`, auditoría `purchase.deleted`); en regulares resta de los cargos del periodo (`statements.service`) |
 | RN-28 | Reiniciar una tarjeta borra su dominio completo y la deja con saldo 0 y crédito completo; eliminarla borra además la tarjeta y los recurrentes ligados a ella. Los movimientos de efectivo de pagos no se tocan | `CardsService.reset` / `CardsService.remove` (`purgeDomain`, auditorías `credit_card.reset` / `credit_card.deleted`) |
+| RN-29 | Sin `days`, la proyección de flujo cubre hasta la última obligación programada (mensualidades pendientes o próxima anualidad) y genera ingresos/gastos hasta ahí; mínimo `projectionMinDays`, tope 5 años | `CashflowContextService.horizonDaysFor` + `CashflowService.projection` |
 
 | Recurrente con tarjeta se confirma como compra | `paymentMethod = CREDIT_CARD` crea `Purchase` REGULAR + entrada `PURCHASE`; efectivo crea `Expense` + movimiento | `PAYMENT_METHOD_REQUIRED`, `CREDIT_CARD_REQUIRED`, `CARD_NOT_FOUND`, `CARD_INACTIVE` |
 | Una ocurrencia se confirma una sola vez | Único `(recurringExpenseId, occurrenceDate)` en Expense y Purchase | `OCCURRENCE_ALREADY_CONFIRMED` |
@@ -2103,7 +2104,7 @@ Si `outcome: "NONE"`: `recommended` ausente y `suggestions` con `{ code: "RETRY_
   "minimum": { "date": "2026-10-06", "balance": -200000 },
   "finalBalance": -100000, "belowBuffer": true }
 ```
-Tipos de evento: `INCOME`, `RECURRING_EXPENSE`, `CARD_STATEMENT`, `INSTALLMENT`, `ANNUAL_FEE` (montos con signo; positivo suma al efectivo). `days` 1–365 (default 60). Usa el mismo contexto que el motor de recomendaciones (RN-09/10/11, cortes, mensualidades y anualidades).
+Tipos de evento: `INCOME`, `RECURRING_EXPENSE`, `CARD_STATEMENT`, `INSTALLMENT`, `ANNUAL_FEE` (montos con signo; positivo suma al efectivo). `days` 1–365 **opcional**: si se omite, el horizonte cubre hasta la última obligación programada (mensualidades pendientes o próxima anualidad, tope 5 años) con mínimo `projectionMinDays`; los ingresos y gastos programados se generan hasta ahí (RN-29). Usa el mismo contexto que el motor de recomendaciones (RN-09/10/11, cortes, mensualidades y anualidades).
 
 **GET /dashboard/summary?month=YYYY-MM → 200**
 ```json
@@ -7347,7 +7348,7 @@ Widgets mínimos:
 6. **Última recomendación** con acceso al historial.
 7. **Alerta de colchón**: si el flujo proyectado mínimo cae bajo `minCashBuffer`.
 
-> Todos los widgets se alimentan de `GET /dashboard/summary` (una sola llamada, agregaciones en el servidor). La gráfica de flujo de efectivo usa `GET /cashflow/projection?days=60` (puntos por fecha con ingresos, egresos, saldo y eventos).
+> Todos los widgets se alimentan de `GET /dashboard/summary` (una sola llamada, agregaciones en el servidor). La gráfica de flujo de efectivo usa `GET /cashflow/projection` sin `days`: el horizonte cubre hasta la última obligación programada (por ejemplo, el fin de una compra a 24 MSI) y los ingresos se proyectan hasta ahí (RN-29).
 
 ## 12.7 Validaciones visuales
 
@@ -7549,7 +7550,7 @@ Holiday calendars: MX_BANKING (default) | MX_LABOR
 
 **Recomendaciones:** `POST /recommendations`, `GET /recommendations`, `GET /recommendations/:id`, `GET /recommendation-rules`, `PUT/DELETE /recommendation-rules/:code/override`.
 
-**Análisis:** `GET /cashflow/projection?days=1..365`, `GET /dashboard/summary?month=YYYY-MM`.
+**Análisis:** `GET /cashflow/projection?days=1..365` (opcional: sin `days`, hasta la última obligación programada), `GET /dashboard/summary?month=YYYY-MM`.
 
 **Admin:** `PATCH /admin/recommendation-rules/:code`, `POST /admin/maintenance/run`.
 

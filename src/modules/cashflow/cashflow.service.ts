@@ -3,8 +3,6 @@ import { compareLocalDates } from '../../domain/shared/local-date';
 import { CashflowContextService } from './cashflow-context.service';
 import { ProjectionQueryDto } from './dto/cashflow.dto';
 
-const DEFAULT_HORIZON_DAYS = 60;
-
 export type ProjectionEventType =
   | 'INCOME'
   | 'RECURRING_EXPENSE'
@@ -39,7 +37,10 @@ export class CashflowService {
   constructor(private readonly context: CashflowContextService) {}
 
   async projection(userId: string, query: ProjectionQueryDto) {
-    const horizonDays = query.days ?? DEFAULT_HORIZON_DAYS;
+    // RN-29: sin `days` el horizonte cubre hasta la ultima obligacion
+    // programada (por ejemplo, el fin de una compra a 24 MSI) y los ingresos
+    // se generan hasta ahi.
+    const horizonDays = await this.context.horizonDaysFor(userId, query.days);
     const base = await this.context.buildBase(userId, horizonDays);
 
     const startingBalance = base.accounts

@@ -1,6 +1,6 @@
 import { NestFastifyApplication } from '@nestjs/platform-fastify';
 import request from 'supertest';
-import { addDays, todayInTimeZone } from '../../src/domain/shared/local-date';
+import { addDays, daysBetween, todayInTimeZone } from '../../src/domain/shared/local-date';
 import {
   authHeader,
   createCard,
@@ -143,5 +143,78 @@ describe('Flujo de efectivo (integracion)', () => {
       .get('/api/v1/cashflow/projection?days=400')
       .set(...authHeader(user.accessToken))
       .expect(400);
+  });
+
+  it('RN-29: sin days el horizonte cubre la ultima mensualidad y suma ingresos hasta ahi', async () => {
+    const user = await createVerifiedUser(app, 'cashflow-msi');
+    const today = todayInTimeZone('America/Mexico_City');
+    const account = await createCashAccount(app, user.accessToken, { openingBalance: 500000 });
+    const card = await createCard(app, user.accessToken, { creditLimit: 5000000 });
+
+    await request(app.getHttpServer())
+      .post('/api/v1/income/sources')
+      .set(...authHeader(user.accessToken))
+      .send({
+        name: 'Sueldo',
+        cashAccountId: account.id,
+        estimatedAmount: 2000000,
+        schedules: [
+          {
+            frequency: 'MONTHLY',
+            config: { day: 1 },
+            nonBusinessDayRule: 'NONE',
+            startDate: today,
+          },
+        ],
+      })
+      .expect(201);
+
+    const purchase = await request(app.getHttpServer())
+      .post('/api/v1/purchases')
+      .set(...authHeader(user.accessToken))
+      .send({
+        creditCardId: card.id,
+        description: 'Compra a 24 MSI',
+        amount: 2400000,
+        purchaseDate: today,
+        type: 'MSI',
+        months: 24,
+      })
+      .expect(201);
+
+    const installments = purchase.body.installmentPlan.installments as Array<{ dueDate: string }>;
+    const lastDueDate = installments[installments.length - 1].dueDate;
+
+    const projection = await request(app.getHttpServer())
+      .get('/api/v1/cashflow/projection')
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+
+    // El horizonte cubre el plan completo (24 meses), muy por encima de 60.
+    expect(projection.body.horizonDays).toBeGreaterThanOrEqual(daysBetween(today, lastDueDate));
+    expect(projection.body.horizonDays).toBeGreaterThan(365);
+
+    const datedEvents = projection.body.points.flatMap(
+      (point: { date: string; events: Array<Record<string, unknown>> }) =>
+        point.events.map((event) => ({ date: point.date, ...event })),
+    );
+    const lastInstallment = datedEvents
+      .filter((event: { type: string }) => event.type === 'INSTALLMENT')
+      .at(-1);
+    expect(lastInstallment.date).toBe(lastDueDate);
+
+    // Los ingresos se generan hasta el final: el ultimo cae a <= 31 dias.
+    const lastIncome = datedEvents
+      .filter((event: { type: string }) => event.type === 'INCOME')
+      .at(-1);
+    expect(lastIncome).toBeDefined();
+    expect(daysBetween(lastIncome.date, lastDueDate)).toBeLessThanOrEqual(31);
+
+    // Un `days` explicito sigue mandando.
+    const explicit = await request(app.getHttpServer())
+      .get('/api/v1/cashflow/projection?days=30')
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(explicit.body.horizonDays).toBe(30);
   });
 });

@@ -1,11 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import { CashAccount, CreditCard, UserSettings } from '@prisma/client';
-import { buildLocalDate, compareLocalDates } from '../../domain/shared/local-date';
+import { addDays, buildLocalDate, compareLocalDates, daysBetween } from '../../domain/shared/local-date';
 import { ClockService } from '../../infrastructure/clock/clock.module';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { StatementsService } from '../cards/statements.service';
 import { RecurringExpensesService, RecurringOccurrence } from '../expenses/recurring-expenses.service';
 import { IncomeService, UpcomingIncomeOccurrence } from '../income/income.service';
+
+/** Tope del horizonte automatico: cubre planes de hasta 48 meses con margen. */
+const MAX_HORIZON_DAYS = 1825;
 
 export type CashflowObligationType = 'CARD_STATEMENT' | 'INSTALLMENT' | 'ANNUAL_FEE';
 
@@ -59,8 +62,8 @@ export class CashflowContextService {
         where: { userId, deletedAt: null, status: 'ACTIVE' },
       }),
       this.prisma.creditCard.findMany({ where: { userId, deletedAt: null, status: 'ACTIVE' } }),
-      this.incomeService.upcoming(userId, { days: horizonDays, limit: 100 }),
-      this.recurringExpenses.upcoming(userId, { days: horizonDays, limit: 100 }),
+      this.incomeService.upcoming(userId, { days: horizonDays, limit: 1000 }),
+      this.recurringExpenses.upcoming(userId, { days: horizonDays, limit: 1000 }),
     ]);
 
     const obligations: CashflowObligation[] = [];
@@ -127,6 +130,58 @@ export class CashflowContextService {
       expenses: expenseUpcoming.occurrences,
       obligations,
     };
+  }
+
+  /**
+   * RN-29: horizonte de la proyeccion cuando el cliente no fija `days`.
+   * Cubre hasta la ultima obligacion programada (mensualidades pendientes o
+   * proxima anualidad) para que el flujo sume ingresos hasta ahi; nunca baja
+   * de `projectionMinDays` y topa a 5 años.
+   */
+  async horizonDaysFor(userId: string, requestedDays?: number): Promise<number> {
+    if (requestedDays !== undefined) {
+      return requestedDays;
+    }
+
+    const settings = await this.prisma.userSettings.upsert({
+      where: { userId },
+      update: {},
+      create: { userId },
+    });
+    const today = this.clock.today(settings.timezone);
+
+    const [lastInstallment, annualFeeCards] = await Promise.all([
+      this.prisma.installment.aggregate({
+        where: { userId, status: { notIn: ['PAID', 'CANCELLED'] } },
+        _max: { dueDate: true },
+      }),
+      this.prisma.creditCard.findMany({
+        where: {
+          userId,
+          deletedAt: null,
+          status: 'ACTIVE',
+          annualFee: { gt: 0 },
+          annualFeeMonth: { not: null },
+        },
+        select: { annualFeeMonth: true },
+      }),
+    ]);
+
+    let last = addDays(today, settings.projectionMinDays);
+    if (lastInstallment._max.dueDate && compareLocalDates(lastInstallment._max.dueDate, last) > 0) {
+      last = lastInstallment._max.dueDate;
+    }
+    for (const card of annualFeeCards) {
+      const feeDate = this.nextAnnualFeeDate(today, card.annualFeeMonth as number);
+      if (compareLocalDates(feeDate, last) > 0) {
+        last = feeDate;
+      }
+    }
+
+    return Math.min(
+      Math.max(daysBetween(today, last), settings.projectionMinDays),
+      MAX_HORIZON_DAYS,
+    );
   }
 
   /** RN-24: proxima anualidad (dia 1 del mes configurado). */
