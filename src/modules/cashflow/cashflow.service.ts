@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { compareLocalDates } from '../../domain/shared/local-date';
+import { compareLocalDates, daysBetween } from '../../domain/shared/local-date';
 import { CashflowContextService } from './cashflow-context.service';
 import { ProjectionQueryDto } from './dto/cashflow.dto';
 
@@ -37,13 +37,13 @@ export class CashflowService {
   constructor(private readonly context: CashflowContextService) {}
 
   async projection(userId: string, query: ProjectionQueryDto) {
-    // RN-29: sin `days` el horizonte cubre hasta la ultima obligacion
-    // programada (por ejemplo, el fin de una compra a 24 MSI) y los ingresos
-    // se generan hasta ahi.
-    const horizonDays = await this.context.horizonDaysFor(userId, query.days);
-    const base = await this.context.buildBase(userId, horizonDays);
+    // RN-29: ventana seleccionable (default hoy a hoy + 30 dias). El flujo se
+    // genera hasta el fin de la ventana para poder mover el saldo inicial con
+    // lo que ocurre antes de `from` (p. ej. cortes vencidos).
+    const { today, from, to } = await this.context.resolveWindow(userId, query);
+    const base = await this.context.buildBase(userId, daysBetween(today, to));
 
-    const startingBalance = base.accounts
+    const todayBalance = base.accounts
       .filter((account) => account.isSpendable)
       .reduce((total, account) => total + account.currentBalance, 0);
 
@@ -81,13 +81,28 @@ export class CashflowService {
       })),
     ].sort((a, b) => compareLocalDates(a.date, b.date));
 
+    // Lo anterior a la ventana mueve el saldo inicial; lo posterior al fin se
+    // ignora en esta proyeccion.
+    let startingBalance = todayBalance;
+    const windowEvents: typeof dated = [];
+    for (const item of dated) {
+      if (compareLocalDates(item.date, from) < 0) {
+        startingBalance += item.event.amount;
+        continue;
+      }
+      if (compareLocalDates(item.date, to) > 0) {
+        continue;
+      }
+      windowEvents.push(item);
+    }
+
     let balance = startingBalance;
     let minimum = startingBalance;
-    let minimumDate = base.today;
+    let minimumDate = from;
     const points: ProjectionPoint[] = [];
     let current: ProjectionPoint | null = null;
 
-    for (const item of dated) {
+    for (const item of windowEvents) {
       if (!current || current.date !== item.date) {
         current = {
           date: item.date,
@@ -115,9 +130,11 @@ export class CashflowService {
     }
 
     return {
-      today: base.today,
+      today,
+      from,
+      to,
       timezone: base.settings.timezone,
-      horizonDays,
+      horizonDays: daysBetween(from, to),
       startingBalance,
       minCashBuffer: base.settings.minCashBuffer,
       points,

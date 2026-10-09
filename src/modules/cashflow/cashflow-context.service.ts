@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { CashAccount, CreditCard, UserSettings } from '@prisma/client';
+import { UnprocessableEntityError } from '../../common/errors/http-errors';
 import { addDays, buildLocalDate, compareLocalDates, daysBetween } from '../../domain/shared/local-date';
 import { ClockService } from '../../infrastructure/clock/clock.module';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
@@ -7,8 +8,15 @@ import { StatementsService } from '../cards/statements.service';
 import { RecurringExpensesService, RecurringOccurrence } from '../expenses/recurring-expenses.service';
 import { IncomeService, UpcomingIncomeOccurrence } from '../income/income.service';
 
-/** Tope del horizonte automatico: cubre planes de hasta 48 meses con margen. */
-const MAX_HORIZON_DAYS = 1825;
+/** Ventana de la proyeccion de flujo. */
+export interface CashflowWindow {
+  today: string;
+  from: string;
+  to: string;
+}
+
+const DEFAULT_WINDOW_DAYS = 30;
+const MAX_WINDOW_DAYS = 1825; // 5 años: cubre planes de hasta 48 meses con margen
 
 export type CashflowObligationType = 'CARD_STATEMENT' | 'INSTALLMENT' | 'ANNUAL_FEE';
 
@@ -133,55 +141,41 @@ export class CashflowContextService {
   }
 
   /**
-   * RN-29: horizonte de la proyeccion cuando el cliente no fija `days`.
-   * Cubre hasta la ultima obligacion programada (mensualidades pendientes o
-   * proxima anualidad) para que el flujo sume ingresos hasta ahi; nunca baja
-   * de `projectionMinDays` y topa a 5 años.
+   * RN-29: ventana de la proyeccion. `from` default hoy y no se permite en el
+   * pasado; `to` default from + 30 dias. `days` se mantiene por compatibilidad
+   * (ventana de N dias a partir de hoy). Maximo 5 años.
    */
-  async horizonDaysFor(userId: string, requestedDays?: number): Promise<number> {
-    if (requestedDays !== undefined) {
-      return requestedDays;
-    }
-
+  async resolveWindow(
+    userId: string,
+    query: { from?: string; to?: string; days?: number },
+  ): Promise<CashflowWindow> {
     const settings = await this.prisma.userSettings.upsert({
       where: { userId },
       update: {},
       create: { userId },
     });
     const today = this.clock.today(settings.timezone);
+    const from = query.from ?? today;
+    const to = query.to ?? addDays(from, query.days ?? DEFAULT_WINDOW_DAYS);
 
-    const [lastInstallment, annualFeeCards] = await Promise.all([
-      this.prisma.installment.aggregate({
-        where: { userId, status: { notIn: ['PAID', 'CANCELLED'] } },
-        _max: { dueDate: true },
-      }),
-      this.prisma.creditCard.findMany({
-        where: {
-          userId,
-          deletedAt: null,
-          status: 'ACTIVE',
-          annualFee: { gt: 0 },
-          annualFeeMonth: { not: null },
-        },
-        select: { annualFeeMonth: true },
-      }),
-    ]);
-
-    let last = addDays(today, settings.projectionMinDays);
-    if (lastInstallment._max.dueDate && compareLocalDates(lastInstallment._max.dueDate, last) > 0) {
-      last = lastInstallment._max.dueDate;
+    if (compareLocalDates(from, today) < 0) {
+      throw new UnprocessableEntityError('La proyeccion no puede empezar antes de hoy.', {
+        reason: 'RANGE_START_IN_PAST',
+      });
     }
-    for (const card of annualFeeCards) {
-      const feeDate = this.nextAnnualFeeDate(today, card.annualFeeMonth as number);
-      if (compareLocalDates(feeDate, last) > 0) {
-        last = feeDate;
-      }
+    if (compareLocalDates(to, from) <= 0) {
+      throw new UnprocessableEntityError('La fecha final debe ser posterior a la inicial.', {
+        reason: 'RANGE_END_BEFORE_START',
+      });
+    }
+    if (daysBetween(from, to) > MAX_WINDOW_DAYS) {
+      throw new UnprocessableEntityError(
+        `La ventana no puede exceder ${MAX_WINDOW_DAYS} dias.`,
+        { reason: 'RANGE_TOO_WIDE' },
+      );
     }
 
-    return Math.min(
-      Math.max(daysBetween(today, last), settings.projectionMinDays),
-      MAX_HORIZON_DAYS,
-    );
+    return { today, from, to };
   }
 
   /** RN-24: proxima anualidad (dia 1 del mes configurado). */

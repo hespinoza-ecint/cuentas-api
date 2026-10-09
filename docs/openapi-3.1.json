@@ -1156,6 +1156,22 @@
         "operationId": "CashflowController_projection",
         "parameters": [
           {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "days",
             "required": false,
             "in": "query",

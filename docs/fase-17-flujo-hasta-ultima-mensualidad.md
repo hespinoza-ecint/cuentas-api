@@ -1,5 +1,9 @@
 # Fase 17 — Flujo de efectivo hasta la última mensualidad (RN-29)
 
+> **Actualizado en la fase 18**: el horizonte automático se reemplazó por una
+> **ventana de fechas seleccionable** (default 30 días). Ver
+> `fase-18-ventana-de-fechas-del-flujo.md`.
+
 ## 1. El problema
 
 La gráfica de flujo usaba 60 días por defecto, pero las **obligaciones de
