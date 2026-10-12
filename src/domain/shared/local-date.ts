@@ -105,10 +105,25 @@ export function firstDayOfMonth(value: string): string {
   return buildLocalDate(parts.year, parts.month, 1);
 }
 
+/** Zona horaria por defecto (la misma que la configuracion inicial del usuario). */
+export const DEFAULT_TIME_ZONE = 'America/Mexico_City';
+
+/** Indica si el texto es una zona horaria IANA valida (por ejemplo America/Mexico_City). */
+export function isValidTimeZone(timeZone: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-CA', { timeZone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Fecha de "hoy" en la zona horaria del usuario, como "YYYY-MM-DD". */
 export function todayInTimeZone(timeZone: string, now: Date = new Date()): string {
+  // Una zona guardada invalida no debe tumbar la peticion: se usa la de defecto.
+  const zone = isValidTimeZone(timeZone) ? timeZone : DEFAULT_TIME_ZONE;
   return new Intl.DateTimeFormat('en-CA', {
-    timeZone,
+    timeZone: zone,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',

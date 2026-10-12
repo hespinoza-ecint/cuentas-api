@@ -6,6 +6,7 @@ import {
   daysInMonth,
   dayOfWeek,
   isValidLocalDate,
+  isValidTimeZone,
   lastDayOfMonth,
   parseLocalDate,
   todayInTimeZone,
@@ -52,5 +53,17 @@ describe('local-date', () => {
     const now = new Date('2026-06-15T03:00:00Z');
     expect(todayInTimeZone('America/Mexico_City', now)).toBe('2026-06-14');
     expect(todayInTimeZone('UTC', now)).toBe('2026-06-15');
+  });
+
+  it('cae a la zona por defecto si la zona guardada no existe', () => {
+    const now = new Date('2026-10-12T02:00:00Z');
+    expect(todayInTimeZone('Zona/Invalida', now)).toBe('2026-10-11');
+  });
+
+  it('valida zonas horarias IANA', () => {
+    expect(isValidTimeZone('America/Mexico_City')).toBe(true);
+    expect(isValidTimeZone('UTC')).toBe(true);
+    expect(isValidTimeZone('America/Mexico City')).toBe(false);
+    expect(isValidTimeZone('No/Existe')).toBe(false);
   });
 });

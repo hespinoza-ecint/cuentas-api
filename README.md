@@ -226,6 +226,12 @@ cuentas-api/
 - [Fase 9 — Gastos recurrentes pagados con tarjeta de crédito](docs/fase-09-recurrentes-tarjeta.md)
 - [Fase 10 — Compras a meses ya iniciadas (mes del primer corte)](docs/fase-10-compras-ya-iniciadas.md)
 - [Fase 11 — Restablecimiento de datos por usuario y exportación completa](docs/fase-11-reset-y-exportacion.md)
+- [Fase 14 — Eliminar compras con plan (RN-27)](docs/fase-14-eliminar-compras-con-plan.md)
+- [Fase 15 — Reiniciar y eliminar tarjetas con todo su historial (RN-28)](docs/fase-15-reiniciar-eliminar-tarjeta.md)
+- [Fase 16 — Ocurrencias vencidas de gastos recurrentes](docs/fase-16-recurrentes-vencidos.md)
+- [Fase 17 — Flujo de efectivo hasta la última mensualidad (RN-29)](docs/fase-17-flujo-hasta-ultima-mensualidad.md)
+- [Fase 18 — Ventana de fechas en el flujo de efectivo (RN-29)](docs/fase-18-ventana-de-fechas-del-flujo.md)
+- [Fase 22 — Edición de ingresos con categoría y zona horaria validada](docs/fase-22-ingresos-y-zona-horaria.md)
 
 ## Documentación técnica completa
 

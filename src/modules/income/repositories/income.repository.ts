@@ -54,7 +54,7 @@ export class IncomeRepository {
     return tx.incomeSource.create({ data, select: { id: true } });
   }
 
-  updateSource(id: string, data: Prisma.IncomeSourceUpdateInput) {
+  updateSource(id: string, data: Prisma.IncomeSourceUncheckedUpdateInput) {
     return this.prisma.incomeSource.update({ where: { id }, data });
   }
 

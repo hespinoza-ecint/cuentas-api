@@ -231,6 +231,38 @@ describe('Ingresos (integracion)', () => {
     expect(history.body.data).toHaveLength(1);
   });
 
+  it('actualiza una fuente con categoria y cuenta de efectivo', async () => {
+    const user = await createVerifiedUser(app, 'income-update');
+    const account = await createCashAccount(app, user.accessToken);
+    const today = todayInTimeZone('America/Mexico_City');
+
+    const category = await request(app.getHttpServer())
+      .post('/api/v1/categories')
+      .set(...authHeader(user.accessToken))
+      .send({ name: 'Nomina', kind: 'INCOME' })
+      .expect(201);
+
+    const source = await createSource(user, account, {
+      name: 'Sueldo',
+      estimatedAmount: 1000000,
+      categoryId: category.body.id,
+      schedules: [{ frequency: 'MONTHLY', startDate: today }],
+    });
+
+    const updated = await request(app.getHttpServer())
+      .patch(`/api/v1/income/sources/${source.id}`)
+      .set(...authHeader(user.accessToken))
+      .send({
+        name: 'Sueldo nuevo',
+        cashAccountId: account.id,
+        categoryId: category.body.id,
+      })
+      .expect(200);
+
+    expect(updated.body.name).toBe('Sueldo nuevo');
+    expect(updated.body.category.id).toBe(category.body.id);
+  });
+
   it('aisla las fuentes de ingreso entre usuarios', async () => {
     const userA = await createVerifiedUser(app, 'income-iso-a');
     const userB = await createVerifiedUser(app, 'income-iso-b');

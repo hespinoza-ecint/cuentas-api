@@ -1,9 +1,11 @@
 import { IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { IsTimeZone } from '../../../common/validation/is-time-zone.decorator';
 
 export class UpdateSettingsDto {
   @IsOptional()
   @IsString({ message: 'timezone debe ser texto' })
   @MaxLength(64, { message: 'timezone no debe exceder 64 caracteres' })
+  @IsTimeZone({ message: 'timezone debe ser una zona IANA valida (ej. America/Mexico_City)' })
   timezone?: string;
 
   @IsOptional()

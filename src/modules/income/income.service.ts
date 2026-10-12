@@ -168,9 +168,7 @@ export class IncomeService {
       ...(dto.amountType !== undefined ? { amountType: dto.amountType } : {}),
       ...(dto.estimatedAmount !== undefined ? { estimatedAmount: dto.estimatedAmount } : {}),
       ...(dto.cashAccountId !== undefined ? { cashAccountId: dto.cashAccountId } : {}),
-      ...(dto.categoryId !== undefined
-        ? { category: { connect: { id: dto.categoryId } } }
-        : {}),
+      ...(dto.categoryId !== undefined ? { categoryId: dto.categoryId } : {}),
       ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
     });
 

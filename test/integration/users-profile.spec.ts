@@ -86,6 +86,32 @@ describe('Perfil y configuracion (integracion)', () => {
       .expect(400);
   });
 
+  it('rechaza una zona horaria que no existe y acepta una valida', async () => {
+    const user = await createVerifiedUser(app, 'settings-tz');
+
+    const invalid = await request(app.getHttpServer())
+      .patch('/api/v1/users/me/settings')
+      .set(...authHeader(user.accessToken))
+      .send({ timezone: 'America/Mexico City' })
+      .expect(400);
+
+    expect(invalid.body.code).toBe('VALIDATION_ERROR');
+
+    await request(app.getHttpServer())
+      .patch('/api/v1/users/me/settings')
+      .set(...authHeader(user.accessToken))
+      .send({ timezone: 'No/Existe' })
+      .expect(400);
+
+    const valid = await request(app.getHttpServer())
+      .patch('/api/v1/users/me/settings')
+      .set(...authHeader(user.accessToken))
+      .send({ timezone: 'America/Tijuana' })
+      .expect(200);
+
+    expect(valid.body.timezone).toBe('America/Tijuana');
+  });
+
   it('cambia la contrasena y cierra las demas sesiones', async () => {
     const user = await createVerifiedUser(app, 'chpass');
     const second = await loginUser(app, user.email);
