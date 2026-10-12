@@ -69,9 +69,18 @@ export function nextCutDate(cutDay: number, reference: string): string {
   return cutDateForMonth(cutDay, nextParts.year, nextParts.month);
 }
 
-/** Primer dia del periodo que cierra en `cutDate`. */
-export function statementPeriodStart(cutDay: number, cutDate: string): string {
-  return addDays(previousCutDate(cutDay, addDays(cutDate, -1)), 1);
+/**
+ * Primer dia del periodo que cierra en `cutDate` (RN-14). Con
+ * `sameDayCutIncluded` empieza el dia despues del corte anterior; sin el,
+ * empieza en el propio corte anterior (ese dia pertenece a este corte).
+ */
+export function statementPeriodStart(
+  cutDay: number,
+  cutDate: string,
+  sameDayCutIncluded: boolean,
+): string {
+  const previousCut = previousCutDate(cutDay, addDays(cutDate, -1));
+  return sameDayCutIncluded ? addDays(previousCut, 1) : previousCut;
 }
 
 /** Cortes que caen dentro de [from, to]. */

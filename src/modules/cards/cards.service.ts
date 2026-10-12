@@ -157,6 +157,23 @@ export class CardsService {
       });
     }
 
+    // Los cortes ya emitidos y las mensualidades guardan el calendario viejo;
+    // cambiar el dia de corte los dejaria colgados.
+    if (dto.cutDay !== undefined && dto.cutDay !== card.cutDay) {
+      const [statements, installments] = await Promise.all([
+        this.prisma.cardStatement.count({ where: { userId, creditCardId: id } }),
+        this.prisma.installment.count({
+          where: { userId, plan: { creditCardId: id }, status: { not: 'CANCELLED' } },
+        }),
+      ]);
+      if (statements > 0 || installments > 0) {
+        throw new UnprocessableEntityError(
+          'No se puede cambiar el dia de corte: la tarjeta ya tiene cortes o mensualidades registradas.',
+          { reason: 'CUT_DAY_LOCKED' },
+        );
+      }
+    }
+
     const updated = await this.cards.update(id, {
       ...(dto.alias !== undefined ? { alias: dto.alias } : {}),
       ...(dto.institution !== undefined ? { institution: dto.institution } : {}),

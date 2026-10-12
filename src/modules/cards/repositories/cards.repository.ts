@@ -39,8 +39,13 @@ export class CardsRepository {
     return client.creditCard.update({ where: { id }, data });
   }
 
-  findStatement(cardId: string, cutDate: string): Promise<CardStatement | null> {
-    return this.prisma.cardStatement.findUnique({
+  findStatement(
+    cardId: string,
+    cutDate: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<CardStatement | null> {
+    const client = tx ?? this.prisma;
+    return client.cardStatement.findUnique({
       where: { creditCardId_cutDate: { creditCardId: cardId, cutDate } },
     });
   }
@@ -87,8 +92,9 @@ export class CardsRepository {
     return client.cardStatement.update({ where: { id }, data });
   }
 
-  async sumAllocations(statementId: string): Promise<number> {
-    const result = await this.prisma.paymentAllocation.aggregate({
+  async sumAllocations(statementId: string, tx?: Prisma.TransactionClient): Promise<number> {
+    const client = tx ?? this.prisma;
+    const result = await client.paymentAllocation.aggregate({
       where: { statementId, cardPayment: { status: 'APPLIED' } },
       _sum: { amount: true },
     });

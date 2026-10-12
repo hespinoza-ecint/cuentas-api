@@ -519,9 +519,14 @@ export class PurchasesService {
         // Una cancelacion previa ya reverso el cargo: solo se borra el registro.
         refundedPrincipal = 0;
       } else if (plan) {
-        // Pagos y anticipos ya aplicados a las mensualidades de este plan.
+        // Pagos y anticipos vigentes aplicados a las mensualidades del plan
+        // (los pagos revertidos ya no cuentan).
         const paid = await tx.paymentAllocation.aggregate({
-          where: { userId, installment: { planId: plan.id } },
+          where: {
+            userId,
+            installment: { planId: plan.id },
+            cardPayment: { status: 'APPLIED' },
+          },
           _sum: { amount: true },
         });
 

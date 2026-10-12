@@ -65,41 +65,72 @@ export class CashflowContextService {
     });
     const today = this.clock.today(settings.timezone);
 
-    const [accounts, cards, incomeUpcoming, expenseUpcoming] = await Promise.all([
+    // Las tarjetas inactivas con deuda siguen contando en las obligaciones.
+    const [accounts, allCards, incomeUpcoming, expenseUpcoming] = await Promise.all([
       this.prisma.cashAccount.findMany({
         where: { userId, deletedAt: null, status: 'ACTIVE' },
       }),
-      this.prisma.creditCard.findMany({ where: { userId, deletedAt: null, status: 'ACTIVE' } }),
+      this.prisma.creditCard.findMany({
+        where: {
+          userId,
+          deletedAt: null,
+          OR: [{ status: 'ACTIVE' }, { currentBalance: { gt: 0 } }],
+        },
+      }),
       this.incomeService.upcoming(userId, { days: horizonDays, limit: 1000 }),
       this.recurringExpenses.upcoming(userId, { days: horizonDays, limit: 1000 }),
     ]);
+    const cards = allCards.filter((card) => card.status === 'ACTIVE');
 
     const obligations: CashflowObligation[] = [];
 
-    for (const card of cards) {
+    for (const card of allCards) {
       await this.statementsService.sync(userId, card.id);
 
+      // La deuda se proyecta una sola vez: el ultimo corte no pagado ya
+      // incluye el saldo anterior sin cubrir.
       const statements = await this.prisma.cardStatement.findMany({
-        where: { userId, creditCardId: card.id, status: { not: 'PAID' } },
+        where: { userId, creditCardId: card.id },
+        orderBy: { cutDate: 'asc' },
       });
-      for (const statement of statements) {
-        const effective = statement.noInterestPaymentReported ?? statement.noInterestPaymentCalc;
-        const outstanding = effective - statement.paidAmount;
+      const latestUnpaid = statements.filter((statement) => statement.status !== 'PAID').at(-1);
+      if (latestUnpaid) {
+        const effective =
+          latestUnpaid.noInterestPaymentReported ?? latestUnpaid.noInterestPaymentCalc;
+        const outstanding = Math.max(effective - latestUnpaid.paidAmount, 0);
         if (outstanding > 0) {
           obligations.push({
-            date: statement.dueDate,
+            date: latestUnpaid.dueDate,
             amount: outstanding,
             type: 'CARD_STATEMENT',
-            description: `Pago ${card.alias} (corte ${statement.cutDate})`,
+            description: `Pago ${card.alias} (corte ${latestUnpaid.cutDate})`,
             cardId: card.id,
             cardAlias: card.alias,
-            statementId: statement.id,
+            statementId: latestUnpaid.id,
           });
         }
       }
 
+      // Ciclo abierto: lo que caera en el proximo corte, aun sin materializar.
+      const projected = await this.statementsService.projectedNextCut(userId, card);
+      if (projected.amount > 0) {
+        obligations.push({
+          date: projected.dueDate,
+          amount: projected.amount,
+          type: 'CARD_STATEMENT',
+          description: `Pago ${card.alias} (corte ${projected.cutDate} por cerrar)`,
+          cardId: card.id,
+          cardAlias: card.alias,
+        });
+      }
+
       const scheduledInstallments = await this.prisma.installment.findMany({
-        where: { userId, plan: { creditCardId: card.id }, status: 'SCHEDULED' },
+        where: {
+          userId,
+          plan: { creditCardId: card.id },
+          status: { in: ['SCHEDULED', 'PARTIALLY_PAID'] },
+          statementCutDate: { not: projected.cutDate },
+        },
       });
       for (const installment of scheduledInstallments) {
         const outstanding = installment.totalAmount - installment.paidAmount;
@@ -117,7 +148,7 @@ export class CashflowContextService {
       }
 
       // RN-24: la anualidad se proyecta como cargo futuro.
-      if (card.annualFee && card.annualFee > 0 && card.annualFeeMonth) {
+      if (card.status === 'ACTIVE' && card.annualFee && card.annualFee > 0 && card.annualFeeMonth) {
         obligations.push({
           date: this.nextAnnualFeeDate(today, card.annualFeeMonth),
           amount: card.annualFee,

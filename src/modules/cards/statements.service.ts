@@ -91,21 +91,21 @@ export class StatementsService {
       select: { amount: true, type: true, occurredOn: true, sourceType: true },
     });
 
-    // Mensualidades exigibles por corte (lo ya pagado reduce lo exigible).
+    // RN-17: las mensualidades se exigen por su monto completo; el avance de
+    // pago vive en paidAmount (asignaciones), no restando lo exigible.
     const installments = await this.prisma.installment.findMany({
       where: {
         userId,
         plan: { creditCardId: card.id },
         status: { not: 'CANCELLED' },
       },
-      select: { statementCutDate: true, totalAmount: true, paidAmount: true },
+      select: { statementCutDate: true, totalAmount: true },
     });
     const dueByCut = new Map<string, number>();
     for (const installment of installments) {
-      const outstanding = Math.max(installment.totalAmount - installment.paidAmount, 0);
       dueByCut.set(
         installment.statementCutDate,
-        (dueByCut.get(installment.statementCutDate) ?? 0) + outstanding,
+        (dueByCut.get(installment.statementCutDate) ?? 0) + installment.totalAmount,
       );
     }
 
@@ -116,95 +116,182 @@ export class StatementsService {
       rule: card.dueNonBusinessDayRule as NonBusinessDayRule,
     };
 
-    let previousUnpaid = 0;
+    await this.prisma.$transaction(
+      async (tx) => {
+        let previousUnpaid = 0;
 
-    for (const cutDate of cuts) {
-      const periodStart = statementPeriodStart(card.cutDay, cutDate);
+        for (const cutDate of cuts) {
+          const periodStart = statementPeriodStart(
+            card.cutDay,
+            cutDate,
+            card.sameDayCutIncluded,
+          );
 
-      const statementBalance = entries
-        .filter((entry) => compareLocalDates(entry.occurredOn, cutDate) <= 0)
-        .reduce((total, entry) => total + entry.amount, 0);
+          const statementBalance = entries
+            .filter((entry) => compareLocalDates(entry.occurredOn, cutDate) <= 0)
+            .reduce((total, entry) => total + entry.amount, 0);
 
-      // Cargos regulares del periodo (las compras a meses se cobran por
-      // mensualidad, por eso su cargo y su reverso quedan fuera). La devolucion
-      // de una compra regular eliminada resta aqui: su cargo original vive en
-      // los cargos del periodo, no en las mensualidades.
-      const regularCycleCharges = entries
-        .filter(
-          (entry) =>
-            isInStatementPeriod(
-              entry.occurredOn,
-              periodStart,
-              cutDate,
-              card.sameDayCutIncluded,
-            ) &&
-            entry.sourceType !== 'InstallmentPlan' &&
-            ((CHARGE_TYPES.has(entry.type) && entry.amount > 0) ||
-              (entry.type === 'REFUND' && entry.sourceType === 'Purchase')),
-        )
-        .reduce((total, entry) => total + entry.amount, 0);
+          const regularCycleCharges = this.periodCharges(
+            entries,
+            periodStart,
+            cutDate,
+            card.sameDayCutIncluded,
+          );
 
-      // RN-17: pago para no generar intereses = cargos del periodo +
-      // mensualidades exigibles + saldo anterior no cubierto.
-      const dueInstallments = dueByCut.get(cutDate) ?? 0;
-      const noInterestPaymentCalc = regularCycleCharges + dueInstallments + previousUnpaid;
+          // RN-17: pago para no generar intereses = cargos del periodo +
+          // mensualidades exigibles + saldo anterior no cubierto.
+          const dueInstallments = dueByCut.get(cutDate) ?? 0;
+          const noInterestPaymentCalc = regularCycleCharges + dueInstallments + previousUnpaid;
 
-      const dueDate = dueDateFor(cutDate, config, holidays);
-      const minimumPaymentEstimated = Math.max(
-        Math.round((statementBalance * MINIMUM_PAYMENT_BPS) / 10_000),
-        0,
-      );
+          const dueDate = dueDateFor(cutDate, config, holidays);
+          const minimumPaymentEstimated = Math.max(
+            Math.round((statementBalance * MINIMUM_PAYMENT_BPS) / 10_000),
+            0,
+          );
 
-      const base = {
-        periodStart,
-        dueDate,
-        statementBalance,
-        cycleCharges: regularCycleCharges,
-        noInterestPaymentCalc,
-        minimumPaymentEstimated,
-      };
+          const base = {
+            periodStart,
+            dueDate,
+            statementBalance,
+            cycleCharges: regularCycleCharges,
+            noInterestPaymentCalc,
+            minimumPaymentEstimated,
+          };
 
-      let statement = await this.cards.findStatement(card.id, cutDate);
-      if (!statement) {
-        statement = await this.cards.createStatement({
-          userId,
-          creditCardId: card.id,
-          cutDate,
-          ...base,
-          paidAmount: 0,
-          status: 'CLOSED',
-        });
-      } else {
-        statement = await this.cards.updateStatement(statement.id, base);
-      }
+          let statement = await this.cards.findStatement(card.id, cutDate, tx);
+          if (!statement) {
+            statement = await this.cards.createStatement(
+              {
+                userId,
+                creditCardId: card.id,
+                cutDate,
+                ...base,
+                paidAmount: 0,
+                status: 'CLOSED',
+              },
+              tx,
+            );
+          } else {
+            statement = await this.cards.updateStatement(statement.id, base, tx);
+          }
 
-      // Las mensualidades del corte quedan facturadas y ligadas al estado.
-      await this.prisma.installment.updateMany({
-        where: {
-          userId,
-          plan: { creditCardId: card.id },
-          statementCutDate: cutDate,
-          status: 'SCHEDULED',
-        },
-        data: { statementId: statement.id, status: 'BILLED' },
-      });
+          // Las mensualidades del corte quedan facturadas y ligadas al estado
+          // (tambien las pagadas parcialmente por anticipos).
+          await tx.installment.updateMany({
+            where: {
+              userId,
+              plan: { creditCardId: card.id },
+              statementCutDate: cutDate,
+              statementId: null,
+              status: { in: ['SCHEDULED', 'PARTIALLY_PAID'] },
+            },
+            data: { statementId: statement.id, status: 'BILLED' },
+          });
 
-      const paid = await this.cards.sumAllocations(statement.id);
-      const amountToAvoidInterest =
-        statement.noInterestPaymentReported ?? statement.noInterestPaymentCalc;
-      const status = statementStatusFor(amountToAvoidInterest, paid, statement.dueDate, today);
+          // RN-23: los anticipos del ciclo abierto se abonan a este corte.
+          await this.adoptOrphanAllocations(tx, card.id, statement, noInterestPaymentCalc);
 
-      if (paid !== statement.paidAmount || status !== statement.status) {
-        await this.cards.updateStatement(statement.id, {
-          paidAmount: paid,
-          status,
-        });
-      }
+          const amountToAvoidInterest =
+            statement.noInterestPaymentReported ?? noInterestPaymentCalc;
+          const paid = await this.cards.sumAllocations(statement.id, tx);
+          const status = statementStatusFor(amountToAvoidInterest, paid, statement.dueDate, today);
 
-      previousUnpaid = Math.max(amountToAvoidInterest - paid, 0);
-    }
+          if (paid !== statement.paidAmount || status !== statement.status) {
+            await this.cards.updateStatement(statement.id, { paidAmount: paid, status }, tx);
+          }
+
+          previousUnpaid = Math.max(amountToAvoidInterest - paid, 0);
+        }
+      },
+      { timeout: 15_000 },
+    );
 
     return this.cards.listStatements(userId, card.id);
+  }
+
+  /**
+   * Cargos regulares del periodo (RN-14 y RN-17): excluye las compras a meses
+   * (se cobran por mensualidad) e incluye los creditos del periodo (devolucion
+   * de compras eliminadas y ajustes negativos).
+   */
+  private periodCharges(
+    entries: Array<{ amount: number; type: string; occurredOn: string; sourceType: string | null }>,
+    periodStart: string,
+    cutDate: string,
+    sameDayCutIncluded: boolean,
+  ): number {
+    return entries
+      .filter(
+        (entry) =>
+          isInStatementPeriod(entry.occurredOn, periodStart, cutDate, sameDayCutIncluded) &&
+          entry.sourceType !== 'InstallmentPlan' &&
+          ((CHARGE_TYPES.has(entry.type) && entry.amount > 0) ||
+            ((entry.type === 'REFUND' || entry.type === 'ADJUSTMENT') && entry.amount < 0)),
+      )
+      .reduce((total, entry) => total + entry.amount, 0);
+  }
+
+  /**
+   * RN-23: adopta las asignaciones huerfanas (pagos hechos antes del corte)
+   * por este corte: primero las ligadas a mensualidades facturadas aqui y
+   * despues el credito generico contra lo exigible. Si el credito excede lo
+   * exigible, conserva el sobrante como revolvente para cortes posteriores.
+   */
+  private async adoptOrphanAllocations(
+    tx: Prisma.TransactionClient,
+    cardId: string,
+    statement: CardStatement,
+    amountToAvoidInterest: number,
+  ): Promise<void> {
+    await tx.paymentAllocation.updateMany({
+      where: {
+        statementId: null,
+        targetType: 'INSTALLMENT',
+        cardPayment: { status: 'APPLIED', creditCardId: cardId },
+        installment: { statementId: statement.id },
+      },
+      data: { statementId: statement.id },
+    });
+
+    const paid = await this.cards.sumAllocations(statement.id, tx);
+    let outstanding = Math.max(amountToAvoidInterest - paid, 0);
+    if (outstanding <= 0) {
+      return;
+    }
+
+    const orphans = await tx.paymentAllocation.findMany({
+      where: {
+        statementId: null,
+        targetType: { in: ['REVOLVING', 'STATEMENT'] },
+        cardPayment: { status: 'APPLIED', creditCardId: cardId },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    for (const orphan of orphans) {
+      if (outstanding <= 0) {
+        break;
+      }
+
+      const applied = Math.min(orphan.amount, outstanding);
+      await tx.paymentAllocation.update({
+        where: { id: orphan.id },
+        data: { statementId: statement.id, amount: applied },
+      });
+      if (applied < orphan.amount) {
+        await tx.paymentAllocation.create({
+          data: {
+            userId: orphan.userId,
+            cardPaymentId: orphan.cardPaymentId,
+            statementId: null,
+            targetType: 'REVOLVING',
+            amount: orphan.amount - applied,
+          },
+        });
+      }
+
+      outstanding -= applied;
+    }
   }
 
   async list(userId: string, cardId: string): Promise<Array<CardStatement & { estimatedInterest: number; estimatedInterestDays: number }>> {
@@ -267,7 +354,11 @@ export class StatementsService {
 
     const lastCutDate = previousCutDate(card.cutDay, today);
     const nextCutDateValue = nextCutDate(card.cutDay, today);
-    const currentPeriodStart = statementPeriodStart(card.cutDay, nextCutDateValue);
+    const currentPeriodStart = statementPeriodStart(
+      card.cutDay,
+      nextCutDateValue,
+      card.sameDayCutIncluded,
+    );
 
     const settings = await this.prisma.userSettings.upsert({
       where: { userId },
@@ -286,12 +377,16 @@ export class StatementsService {
         creditCardId: card.id,
         occurredOn: { gte: currentPeriodStart, lte: today },
       },
-      select: { amount: true, type: true, occurredOn: true },
+      select: { amount: true, type: true, occurredOn: true, sourceType: true },
     });
 
-    const cycleChargesToDate = entries
-      .filter((entry) => CHARGE_TYPES.has(entry.type) && entry.amount > 0)
-      .reduce((total, entry) => total + entry.amount, 0);
+    // Misma regla que los cortes: excluye compras a meses y resta creditos.
+    const cycleChargesToDate = this.periodCharges(
+      entries,
+      currentPeriodStart,
+      nextCutDateValue,
+      card.sameDayCutIncluded,
+    );
 
     const dueDate = dueDateFor(
       nextCutDateValue,
@@ -314,6 +409,80 @@ export class StatementsService {
       currentBalance: card.currentBalance,
       availableCredit: card.availableCredit,
       projectedDueDate: dueDate,
+    };
+  }
+
+  /**
+   * Obligacion proyectada del siguiente corte (aun sin materializar): cargos
+   * del ciclo abierto + mensualidades que se facturaran ahi menos el credito
+   * disponible de anticipos genericos. La usan el flujo, el dashboard y el
+   * motor de recomendaciones para no ignorar el ciclo abierto.
+   */
+  async projectedNextCut(
+    userId: string,
+    card: CreditCard,
+  ): Promise<{ cutDate: string; dueDate: string; amount: number }> {
+    const today = await this.datePolicy.today(userId);
+    const cutDate = nextCutDate(card.cutDay, today);
+    const periodStart = statementPeriodStart(card.cutDay, cutDate, card.sameDayCutIncluded);
+
+    const [settings, entries, installments, orphanCredit] = await Promise.all([
+      this.prisma.userSettings.upsert({
+        where: { userId },
+        update: {},
+        create: { userId },
+      }),
+      this.prisma.cardLedgerEntry.findMany({
+        where: { userId, creditCardId: card.id, occurredOn: { gte: periodStart, lte: today } },
+        select: { amount: true, type: true, occurredOn: true, sourceType: true },
+      }),
+      this.prisma.installment.findMany({
+        where: {
+          userId,
+          plan: { creditCardId: card.id },
+          statementCutDate: cutDate,
+          status: { in: ['SCHEDULED', 'PARTIALLY_PAID'] },
+        },
+        select: { totalAmount: true, paidAmount: true },
+      }),
+      this.prisma.paymentAllocation.aggregate({
+        where: {
+          statementId: null,
+          targetType: { in: ['REVOLVING', 'STATEMENT'] },
+          cardPayment: { status: 'APPLIED', creditCardId: card.id },
+        },
+        _sum: { amount: true },
+      }),
+    ]);
+
+    const charges = this.periodCharges(entries, periodStart, cutDate, card.sameDayCutIncluded);
+    const dueInstallments = installments.reduce(
+      (total, installment) =>
+        total + Math.max(installment.totalAmount - installment.paidAmount, 0),
+      0,
+    );
+    const credit = Math.max(orphanCredit._sum.amount ?? 0, 0);
+
+    const holidays = await this.holidays.getHolidaySet(
+      settings.holidayCalendarCode,
+      addDays(cutDate, -15),
+      addDays(cutDate, 90),
+    );
+    const dueDate = dueDateFor(
+      cutDate,
+      {
+        mode: card.dueDateMode as DueDateConfig['mode'],
+        dueDay: card.dueDay,
+        dueDaysAfterCut: card.dueDaysAfterCut,
+        rule: card.dueNonBusinessDayRule as NonBusinessDayRule,
+      },
+      holidays,
+    );
+
+    return {
+      cutDate,
+      dueDate,
+      amount: Math.max(charges + dueInstallments - credit, 0),
     };
   }
 

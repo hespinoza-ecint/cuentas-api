@@ -1241,13 +1241,13 @@ Los días que no existen en un mes se ajustan al último día. Las fechas se aju
 | RN-14 | Compra el día del corte entra en ese corte (configurable) | `sameDayCutIncluded`, `cutDateForPurchase` |
 | RN-15 | Saldo de tarjeta híbrido + conciliación auditada | `CardsService.reconcile` (entrada `ADJUSTMENT`) |
 | RN-16 | Pago mínimo reportado o estimado (1.25% del saldo al corte) | `CardStatement.minimumPayment*` |
-| RN-17 | Pago para no generar intereses calculado y sobrescribible | `StatementsService.sync` (`noInterestPaymentCalc`) |
+| RN-17 | Pago para no generar intereses = cargos regulares + mensualidades exigidas por su **monto completo** + saldo anterior no cubierto; sobrescribible | `StatementsService.sync` (`noInterestPaymentCalc`, `periodCharges`) |
 | RN-18 | MSI/diferidas ocupan el monto completo del crédito y lo liberan al pagar | Entrada `PURCHASE` por el total; pagos reducen el saldo |
 | RN-19 | Primera mensualidad en el corte de la compra; residuo en la última | `cutDateForPurchase` + `buildMsiSchedule`/`buildFrenchSchedule` |
 | RN-20 | Diferidas: cuota fija capital+interés (francesa) e IVA 16% sobre el interés sumado al pago; comisión configurable | `amortization.ts` |
 | RN-21 | Anticipos reducen plazo por defecto | `prepay` (`REDUCE_TERM`); `REDUCE_PAYMENT` responde 422 |
 | RN-22 | Interés estimado = saldo × tasa/360 × días × 1.16 en cortes vencidos | `StatementsService.withEstimatedInterest` (`estimatedInterest`) |
-| RN-23 | Pagos: primero mensualidades exigibles, luego cargos del corte, luego revolvente | `applyPaymentAllocations` |
+| RN-23 | Pagos: primero mensualidades exigibles, luego cargos del corte, luego revolvente; al materializar cada corte se adoptan los anticipos del ciclo abierto (el sobrante pasa al siguiente corte) | `applyPaymentAllocations` + `StatementsService.adoptOrphanAllocations` |
 | RN-24 | Anualidad como cargo/obligación futura | Obligación `Anualidad {alias}` en recomendaciones |
 | RN-25 | Gasto = efectivo/débito; compra = tarjeta | `Expenses` vs `Purchases` |
 | RN-26 | Errores/cancelaciones se corrigen con reverso | `reverse` en movimientos/gastos/pagos; cancelación de compra con `REFUND` |
@@ -1282,6 +1282,7 @@ Los días que no existen en un mes se ajustan al último día. Las fechas se aju
 | Mensualidad duplicada | Único `(planId, number)` / `(recurringExpenseId, occurrenceDate)` | `OCCURRENCE_ALREADY_*` |
 | Compra cancelable solo sin pagos | 422 si hay mensualidades con pago | `PLAN_HAS_PAYMENTS` |
 | Pago no puede exceder saldo | 422 | `PAYMENT_EXCEEDS_BALANCE`, `CARD_WITHOUT_BALANCE` |
+| Cambio de día de corte bloqueado con historial | Cortes emitidos o mensualidades existentes → 422 | `CUT_DAY_LOCKED` |
 | Anticipo no puede exceder el plan | 422 | `PREPAYMENT_EXCEEDS_PLAN`, `PLAN_PAID_OFF` |
 | Reglas eliminatorias sin peso (admin) | 400 | `ELIMINATORY_RULE_WITH_WEIGHT` |
 | Idempotencia opcional | Replay o 409 si cambia el cuerpo | `IDEMPOTENCY_KEY_INVALID`, `IDEMPOTENCY_KEY_CONFLICT` |
@@ -1304,8 +1305,10 @@ Los días que no existen en un mes se ajustan al último día. Las fechas se aju
 | Proceso | Disparador | Descripción |
 |---|---|---|
 | Materialización de estados de cuenta | Primera lectura (`GET statements` / recomendar / pagar) | Crea/actualiza los cortes ocurridos desde el primer movimiento; recalcula montos desde el libro |
-| Facturación de mensualidades | Sync de cortes | `SCHEDULED → BILLED` + `statementId` |
-| Cálculo de pago para no generar intereses | Sync | Cargos regulares + mensualidades exigibles pendientes + saldo anterior no cubierto |
+| Facturación de mensualidades | Sync de cortes | `SCHEDULED → BILLED` + `statementId` (también las pagadas parcialmente por anticipos) |
+| Cálculo de pago para no generar intereses | Sync | Cargos regulares + mensualidades exigibles (monto completo) + saldo anterior no cubierto |
+| Adopción de anticipos del ciclo abierto | Sync de cortes | Las asignaciones huérfanas se abonan al corte más antiguo con saldo (dividiendo la asignación si sobra); el sobrante queda revolvente |
+| Deuda proyectada por tarjeta | Flujo/dashboard | Último corte no pagado + corte próximo por cerrar (ciclo abierto + mensualidades − anticipos) |
 | Intereses estimados | Lectura de cortes vencidos | `estimatedInterest` (RN-22) |
 | Anualidad | Contexto de recomendación | Obligación futura en el 1º del mes configurado |
 | Bloqueo de cuenta | 5º intento fallido | `lockedUntil = now + 15 min`, contador reiniciado |
@@ -1319,7 +1322,7 @@ Los días que no existen en un mes se ajustan al último día. Las fechas se aju
 | Saldo de cuenta | Suma de `CashMovement.amount` (caché `currentBalance` con `balanceVersion`) |
 | Crédito disponible | `creditLimit − currentBalance` (caché `availableCredit`) |
 | Saldo al corte | Suma de todas las entradas del libro con `occurredOn ≤ cutDate` |
-| Pago para no generar intereses | Cargos regulares del periodo + mensualidades exigibles pendientes del corte + saldo anterior no cubierto |
+| Pago para no generar intereses | Cargos regulares del periodo + mensualidades exigibles del corte (monto completo) + saldo anterior no cubierto |
 | Pago mínimo estimado | `max(round(saldo al corte × 1.25%), 0)` |
 | Interés estimado (RN-22) | `round(saldoInsoluto × tasaAnual / 360 × díasVencidos × 1.16)` |
 | MSI | Cuota base = `floor(principal/meses)`; residuo en la **última**; suma exacta = principal |

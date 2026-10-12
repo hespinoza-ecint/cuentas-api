@@ -38,8 +38,10 @@ describe('card-cycle (RN-12, RN-13, RN-14)', () => {
     });
 
     it('calcula el inicio del periodo', () => {
-      expect(statementPeriodStart(15, '2026-02-15')).toBe('2026-01-16');
-      expect(statementPeriodStart(31, '2026-03-31')).toBe('2026-03-01');
+      expect(statementPeriodStart(15, '2026-02-15', true)).toBe('2026-01-16');
+      expect(statementPeriodStart(31, '2026-03-31', true)).toBe('2026-03-01');
+      // RN-14: sin incluir el dia del corte, el periodo empieza en el corte anterior.
+      expect(statementPeriodStart(15, '2026-02-15', false)).toBe('2026-01-15');
     });
 
     it('enumera los cortes del rango', () => {

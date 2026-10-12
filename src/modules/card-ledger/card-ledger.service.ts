@@ -86,12 +86,12 @@ export class CardLedgerService {
       },
     });
 
-    const newBalance = card.currentBalance + input.amount;
+    // Escritura atomica: dos movimientos simultaneos ya no se pisan.
     await client.creditCard.update({
       where: { id: card.id },
       data: {
-        currentBalance: newBalance,
-        availableCredit: card.creditLimit - newBalance,
+        currentBalance: { increment: input.amount },
+        availableCredit: { decrement: input.amount },
         balanceVersion: { increment: 1 },
       },
     });

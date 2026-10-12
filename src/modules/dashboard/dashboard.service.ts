@@ -45,16 +45,18 @@ export class DashboardService {
       addDays(today, 120),
     );
 
+    // Una sola deuda por tarjeta: el corte mas reciente ya incluye el saldo
+    // anterior sin cubrir, asi que los anteriores no se suman aparte.
     const statements = await this.prisma.cardStatement.findMany({
       where: { userId, status: { not: 'PAID' } },
+      orderBy: { cutDate: 'asc' },
     });
     const pendingByCard = new Map<string, number>();
     for (const statement of statements) {
       const effective = statement.noInterestPaymentReported ?? statement.noInterestPaymentCalc;
-      const outstanding = Math.max(effective - statement.paidAmount, 0);
       pendingByCard.set(
         statement.creditCardId,
-        (pendingByCard.get(statement.creditCardId) ?? 0) + outstanding,
+        Math.max(effective - statement.paidAmount, 0),
       );
     }
 
