@@ -1,6 +1,6 @@
 import { cutDateForPurchase, cutDatesFrom, dueDateFor } from '../cards/card-cycle';
 import { buildFrenchSchedule, buildMsiSchedule } from '../installments/amortization';
-import { compareLocalDates, daysBetween } from '../shared/local-date';
+import { addDays, compareLocalDates, daysBetween } from '../shared/local-date';
 import {
   CardSnapshot,
   DISCLAIMER,
@@ -167,6 +167,19 @@ function buildCashOption(
   };
 }
 
+/**
+ * Fin de la ventana de una opcion: hasta el ultimo pago del plan, con el
+ * minimo de proyeccion configurado. Eventos posteriores no la ensucian.
+ */
+function windowEndFor(context: EngineContext, paymentPlan: PaymentPlanEntry[]): string {
+  const lastPlanDate = paymentPlan.reduce(
+    (latest, entry) => (compareLocalDates(entry.date, latest) > 0 ? entry.date : latest),
+    context.settings.today,
+  );
+  const minimumDate = addDays(context.settings.today, context.settings.projectionMinDays);
+  return compareLocalDates(lastPlanDate, minimumDate) > 0 ? lastPlanDate : minimumDate;
+}
+
 /** Proyeccion de flujo: saldo gastable + ingresos - gastos - obligaciones - compra. */
 function projectOption(
   context: EngineContext,
@@ -175,6 +188,8 @@ function projectOption(
   const startBalance = context.cashAccounts
     .filter((account) => account.isSpendable)
     .reduce((total, account) => total + account.currentBalance, 0);
+
+  const windowEnd = windowEndFor(context, paymentPlan);
 
   const events = [
     ...context.expectedIncomes.map((income) => ({ date: income.date, amount: income.amount })),
@@ -187,7 +202,9 @@ function projectOption(
       amount: -obligation.amount,
     })),
     ...paymentPlan.map((entry) => ({ date: entry.date, amount: -entry.amount })),
-  ].sort((a, b) => compareLocalDates(a.date, b.date));
+  ]
+    .filter((event) => compareLocalDates(event.date, windowEnd) <= 0)
+    .sort((a, b) => compareLocalDates(a.date, b.date));
 
   let balance = startBalance;
   let minimum = startBalance;
@@ -217,6 +234,7 @@ function baselineSuggestion(
     return context.settings.today;
   }
 
+  const windowEnd = windowEndFor(context, []);
   const events = [
     ...context.expectedIncomes.map((income) => ({ date: income.date, amount: income.amount })),
     ...context.scheduledExpenses.map((expense) => ({
@@ -227,7 +245,9 @@ function baselineSuggestion(
       date: obligation.date,
       amount: -obligation.amount,
     })),
-  ].sort((a, b) => compareLocalDates(a.date, b.date));
+  ]
+    .filter((event) => compareLocalDates(event.date, windowEnd) <= 0)
+    .sort((a, b) => compareLocalDates(a.date, b.date));
 
   let balance = startBalance;
   for (const event of events) {

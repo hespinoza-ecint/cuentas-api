@@ -172,7 +172,17 @@ export class StatementsService {
               tx,
             );
           } else {
-            statement = await this.cards.updateStatement(statement.id, base, tx);
+            // Solo se escribe si algo cambio: el sync corre en cada lectura.
+            const changed =
+              statement.periodStart !== base.periodStart ||
+              statement.dueDate !== base.dueDate ||
+              statement.statementBalance !== base.statementBalance ||
+              statement.cycleCharges !== base.cycleCharges ||
+              statement.noInterestPaymentCalc !== base.noInterestPaymentCalc ||
+              statement.minimumPaymentEstimated !== base.minimumPaymentEstimated;
+            if (changed) {
+              statement = await this.cards.updateStatement(statement.id, base, tx);
+            }
           }
 
           // Las mensualidades del corte quedan facturadas y ligadas al estado

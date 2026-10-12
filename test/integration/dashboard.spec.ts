@@ -112,6 +112,37 @@ describe('Dashboard (integracion)', () => {
     expect(summary.body.lastRecommendation.outcome).toEqual(expect.any(String));
   });
 
+  it('limita los proximos pagos a la ventana de 30 dias (las mensualidades lejanas no suman)', async () => {
+    const user = await createVerifiedUser(app, 'dashboard-horizon');
+    const today = todayInTimeZone('America/Mexico_City');
+    const card = await createCard(app, user.accessToken, {
+      creditLimit: 3000000,
+      cutDay: Number(today.slice(8, 10)),
+    });
+
+    // Plan de 24 meses: 2400000/24 = 100000 exigible en el corte de hoy.
+    await request(app.getHttpServer())
+      .post('/api/v1/purchases')
+      .set(...authHeader(user.accessToken))
+      .send({
+        creditCardId: card.id,
+        description: 'Plan largo',
+        amount: 2400000,
+        purchaseDate: today,
+        type: 'MSI',
+        months: 24,
+      })
+      .expect(201);
+
+    const summary = await request(app.getHttpServer())
+      .get('/api/v1/dashboard/summary')
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+
+    expect(summary.body.upcomingPayments.horizonDays).toBe(30);
+    expect(summary.body.upcomingPayments.total).toBe(100000);
+  });
+
   it('acepta un mes explicito y valida el formato', async () => {
     const user = await createVerifiedUser(app, 'dashboard-month');
 

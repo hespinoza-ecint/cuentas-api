@@ -69,6 +69,28 @@ function regularPurchase(overrides: Partial<RecommendationRequest> = {}): Recomm
 }
 
 describe('motor de recomendaciones', () => {
+  it('ignora las obligaciones posteriores al fin del plan al minimizar el flujo', () => {
+    const contextWithLongTail = context({
+      expectedIncomes: [{ date: '2026-05-31', amount: 300_000, description: 'Nomina' }],
+      cardObligations: [
+        { date: '2026-06-04', amount: 150_000, cardId: 'card-1', description: 'corte' },
+        // Obligacion lejana (otra MSI): hoy empujaria el minimo a negativo.
+        { date: '2027-06-15', amount: 900_000, cardId: 'card-1', description: 'mensualidad lejana' },
+      ],
+    });
+
+    const result = recommend(contextWithLongTail, regularPurchase());
+    const option = result.alternatives
+      .concat(result.recommended ? [result.recommended] : [])
+      .find((candidate) => candidate.cardId === 'card-1');
+
+    // 500000 (saldo) + 300000 (ingreso) - 150000 (corte) - 200000 (compra).
+    expect(option?.minimumProjectedBalance).toBe(450_000);
+    expect(
+      option?.eliminatedBy.some((finding) => finding.code === 'CASHFLOW_NON_NEGATIVE'),
+    ).toBe(false);
+  });
+
   it('regular: calcula corte, fecha de pago y dias de financiamiento', () => {
     const result = recommend(context(), regularPurchase());
     const option = result.recommended?.cardId ? result.recommended : result.alternatives[0];

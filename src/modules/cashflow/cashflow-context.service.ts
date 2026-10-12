@@ -1,11 +1,22 @@
 import { Injectable } from '@nestjs/common';
 import { CashAccount, CreditCard, UserSettings } from '@prisma/client';
 import { UnprocessableEntityError } from '../../common/errors/http-errors';
-import { addDays, buildLocalDate, compareLocalDates, daysBetween } from '../../domain/shared/local-date';
+import {
+  DueDateConfig,
+  cutDateForPurchase,
+  dueDateFor,
+} from '../../domain/cards/card-cycle';
+import {
+  addDays,
+  buildLocalDate,
+  compareLocalDates,
+  daysBetween,
+} from '../../domain/shared/local-date';
 import { ClockService } from '../../infrastructure/clock/clock.module';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { StatementsService } from '../cards/statements.service';
 import { RecurringExpensesService, RecurringOccurrence } from '../expenses/recurring-expenses.service';
+import { HolidayCalendarService } from '../holidays/holiday-calendar.service';
 import { IncomeService, UpcomingIncomeOccurrence } from '../income/income.service';
 
 /** Ventana de la proyeccion de flujo. */
@@ -55,6 +66,7 @@ export class CashflowContextService {
     private readonly incomeService: IncomeService,
     private readonly recurringExpenses: RecurringExpensesService,
     private readonly statementsService: StatementsService,
+    private readonly holidays: HolidayCalendarService,
   ) {}
 
   async buildBase(userId: string, horizonDays: number): Promise<CashflowBase> {
@@ -64,6 +76,12 @@ export class CashflowContextService {
       create: { userId },
     });
     const today = this.clock.today(settings.timezone);
+    const horizonEnd = addDays(today, horizonDays);
+    const holidays = await this.holidays.getHolidaySet(
+      settings.holidayCalendarCode,
+      today,
+      addDays(horizonEnd, 60),
+    );
 
     // Las tarjetas inactivas con deuda siguen contando en las obligaciones.
     const [accounts, allCards, incomeUpcoming, expenseUpcoming] = await Promise.all([
@@ -94,7 +112,7 @@ export class CashflowContextService {
         orderBy: { cutDate: 'asc' },
       });
       const latestUnpaid = statements.filter((statement) => statement.status !== 'PAID').at(-1);
-      if (latestUnpaid) {
+      if (latestUnpaid && compareLocalDates(latestUnpaid.dueDate, horizonEnd) <= 0) {
         const effective =
           latestUnpaid.noInterestPaymentReported ?? latestUnpaid.noInterestPaymentCalc;
         const outstanding = Math.max(effective - latestUnpaid.paidAmount, 0);
@@ -113,7 +131,7 @@ export class CashflowContextService {
 
       // Ciclo abierto: lo que caera en el proximo corte, aun sin materializar.
       const projected = await this.statementsService.projectedNextCut(userId, card);
-      if (projected.amount > 0) {
+      if (projected.amount > 0 && compareLocalDates(projected.dueDate, horizonEnd) <= 0) {
         obligations.push({
           date: projected.dueDate,
           amount: projected.amount,
@@ -130,6 +148,7 @@ export class CashflowContextService {
           plan: { creditCardId: card.id },
           status: { in: ['SCHEDULED', 'PARTIALLY_PAID'] },
           statementCutDate: { not: projected.cutDate },
+          dueDate: { lte: horizonEnd },
         },
       });
       for (const installment of scheduledInstallments) {
@@ -147,18 +166,40 @@ export class CashflowContextService {
         }
       }
 
-      // RN-24: la anualidad se proyecta como cargo futuro.
+      // RN-24: la anualidad se cobra al libro de la tarjeta y se paga en el
+      // corte que la incluye; se proyecta una por ano dentro de la ventana.
       if (card.status === 'ACTIVE' && card.annualFee && card.annualFee > 0 && card.annualFeeMonth) {
-        obligations.push({
-          date: this.nextAnnualFeeDate(today, card.annualFeeMonth),
-          amount: card.annualFee,
-          type: 'ANNUAL_FEE',
-          description: `Anualidad ${card.alias}`,
-          cardId: card.id,
-          cardAlias: card.alias,
-        });
+        const firstYear = Number(today.slice(0, 4));
+        for (let year = firstYear; year <= firstYear + 6; year += 1) {
+          const feeDate = buildLocalDate(year, card.annualFeeMonth, 1);
+          const cutDate = cutDateForPurchase(
+            card.cutDay,
+            feeDate,
+            card.sameDayCutIncluded,
+          );
+          const dueDate = this.cardDueDate(card, cutDate, holidays);
+          if (compareLocalDates(dueDate, today) < 0) {
+            continue;
+          }
+          if (compareLocalDates(dueDate, horizonEnd) > 0) {
+            break;
+          }
+          obligations.push({
+            date: dueDate,
+            amount: card.annualFee,
+            type: 'ANNUAL_FEE',
+            description: `Anualidad ${card.alias}`,
+            cardId: card.id,
+            cardAlias: card.alias,
+          });
+        }
       }
     }
+
+    const expenses = expenseUpcoming.occurrences
+      .map((occurrence) => this.toCashOccurrence(occurrence, allCards, holidays, today))
+      .filter((occurrence) => compareLocalDates(occurrence.expectedDate, horizonEnd) <= 0)
+      .sort((a, b) => compareLocalDates(a.expectedDate, b.expectedDate));
 
     return {
       settings,
@@ -166,9 +207,50 @@ export class CashflowContextService {
       accounts,
       cards,
       incomes: incomeUpcoming.occurrences,
-      expenses: expenseUpcoming.occurrences,
+      expenses,
       obligations,
     };
+  }
+
+  /**
+   * RN-25 con tarjeta: el cargo al plastico no saca efectivo; el efectivo sale
+   * al pagar el corte que lo incluye (RN-13).
+   */
+  private toCashOccurrence(
+    occurrence: RecurringOccurrence,
+    cards: CreditCard[],
+    holidays: ReadonlySet<string>,
+    today: string,
+  ): RecurringOccurrence {
+    if (occurrence.paymentMethod !== 'CREDIT_CARD' || !occurrence.creditCardId) {
+      return occurrence;
+    }
+    const card = cards.find((entry) => entry.id === occurrence.creditCardId);
+    if (!card) {
+      return occurrence;
+    }
+
+    const cutDate = cutDateForPurchase(
+      card.cutDay,
+      occurrence.expectedDate,
+      card.sameDayCutIncluded,
+    );
+    const dueDate = this.cardDueDate(card, cutDate, holidays);
+    return { ...occurrence, expectedDate: dueDate, daysUntil: daysBetween(today, dueDate) };
+  }
+
+  /** RN-13: fecha limite del corte con la configuracion de la tarjeta. */
+  private cardDueDate(card: CreditCard, cutDate: string, holidays: ReadonlySet<string>): string {
+    return dueDateFor(
+      cutDate,
+      {
+        mode: card.dueDateMode as DueDateConfig['mode'],
+        dueDay: card.dueDay,
+        dueDaysAfterCut: card.dueDaysAfterCut,
+        rule: card.dueNonBusinessDayRule as DueDateConfig['rule'],
+      },
+      holidays,
+    );
   }
 
   /**
@@ -207,14 +289,5 @@ export class CashflowContextService {
     }
 
     return { today, from, to };
-  }
-
-  /** RN-24: proxima anualidad (dia 1 del mes configurado). */
-  nextAnnualFeeDate(today: string, month: number): string {
-    const year = Number(today.slice(0, 4));
-    const candidate = buildLocalDate(year, month, 1);
-    return compareLocalDates(candidate, today) < 0
-      ? buildLocalDate(year + 1, month, 1)
-      : candidate;
   }
 }

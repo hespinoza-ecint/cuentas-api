@@ -40,6 +40,9 @@ export interface RecurringOccurrence {
   amount: number;
   categoryId: string | null;
   daysUntil: number;
+  /** RN-25: con tarjeta el efectivo sale al pagar el corte que incluye el cargo. */
+  paymentMethod: string;
+  creditCardId: string | null;
 }
 
 /** Resultado de confirmar una ocurrencia (efectivo o tarjeta). */
@@ -257,6 +260,8 @@ export class RecurringExpensesService {
           expectedDate,
           amount: recurrence.amount,
           categoryId: recurrence.categoryId,
+          paymentMethod: recurrence.paymentMethod,
+          creditCardId: recurrence.creditCardId,
           daysUntil: Math.round(
             (new Date(`${expectedDate}T00:00:00Z`).getTime() -
               new Date(`${today}T00:00:00Z`).getTime()) /

@@ -1248,8 +1248,8 @@ Los días que no existen en un mes se ajustan al último día. Las fechas se aju
 | RN-21 | Anticipos reducen plazo por defecto | `prepay` (`REDUCE_TERM`); `REDUCE_PAYMENT` responde 422 |
 | RN-22 | Interés estimado = saldo × tasa/360 × días × 1.16 en cortes vencidos | `StatementsService.withEstimatedInterest` (`estimatedInterest`) |
 | RN-23 | Pagos: primero mensualidades exigibles, luego cargos del corte, luego revolvente; al materializar cada corte se adoptan los anticipos del ciclo abierto (el sobrante pasa al siguiente corte) | `applyPaymentAllocations` + `StatementsService.adoptOrphanAllocations` |
-| RN-24 | Anualidad como cargo/obligación futura | Obligación `Anualidad {alias}` en recomendaciones |
-| RN-25 | Gasto = efectivo/débito; compra = tarjeta | `Expenses` vs `Purchases` |
+| RN-24 | Anualidad como cargo al corte: una proyección por año dentro de la ventana, pagadera en la fecha límite del corte que la cobra | Obligación `Anualidad {alias}` en flujo, dashboard y recomendaciones |
+| RN-25 | Gasto = efectivo/débito; compra = tarjeta; los recurrentes con tarjeta se proyectan en el pago del corte (no el día del cargo) | `Expenses` vs `Purchases`; `CashflowContextService.toCashOccurrence` |
 | RN-26 | Errores/cancelaciones se corrigen con reverso | `reverse` en movimientos/gastos/pagos; cancelación de compra con `REFUND` |
 | RN-27 | Eliminar una compra (regular, MSI o diferida) revierte en la tarjeta el cargo vivo —con plan: cargo original − pagos aplicados; regular: hasta la deuda actual— fechado en el periodo original para que los cortes ya cerrados se recalculen, y borra el registro; lo ya pagado no se toca | `PurchasesService.remove` (entrada `REFUND` con `allowBackdated`, auditoría `purchase.deleted`); en regulares resta de los cargos del periodo (`statements.service`) |
 | RN-28 | Reiniciar una tarjeta borra su dominio completo y la deja con saldo 0 y crédito completo; eliminarla borra además la tarjeta y los recurrentes ligados a ella. Los movimientos de efectivo de pagos no se tocan | `CardsService.reset` / `CardsService.remove` (`purgeDomain`, auditorías `credit_card.reset` / `credit_card.deleted`) |
@@ -1309,8 +1309,9 @@ Los días que no existen en un mes se ajustan al último día. Las fechas se aju
 | Cálculo de pago para no generar intereses | Sync | Cargos regulares + mensualidades exigibles (monto completo) + saldo anterior no cubierto |
 | Adopción de anticipos del ciclo abierto | Sync de cortes | Las asignaciones huérfanas se abonan al corte más antiguo con saldo (dividiendo la asignación si sobra); el sobrante queda revolvente |
 | Deuda proyectada por tarjeta | Flujo/dashboard | Último corte no pagado + corte próximo por cerrar (ciclo abierto + mensualidades − anticipos) |
+| Recorte por horizonte | Contexto de flujo | Ingresos, gastos y obligaciones se recortan a `[hoy, hoy + N días]`; el motor de recomendaciones además recorta al fin del plan evaluado |
+| Anualidad por año | Flujo/dashboard/recomendaciones | Una proyección por año dentro de la ventana, fechada en la fecha límite del corte que la cobra |
 | Intereses estimados | Lectura de cortes vencidos | `estimatedInterest` (RN-22) |
-| Anualidad | Contexto de recomendación | Obligación futura en el 1º del mes configurado |
 | Bloqueo de cuenta | 5º intento fallido | `lockedUntil = now + 15 min`, contador reiniciado |
 | Expiración/rotación de sesiones | Refresh/logout | Familias revocadas ante reuso |
 | Mantenimiento | Cron 03:00 / endpoint admin | Purga usuarios 30 días, limpia sesiones/tokens (>30 días) e idempotencia vencida |
