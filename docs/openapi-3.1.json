@@ -2603,6 +2603,44 @@
         ]
       }
     },
+    "/api/v1/recurring-expenses/{id}/skip": {
+      "post": {
+        "operationId": "RecurringExpensesController_skip",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkipRecurringExpenseDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "recurring-expenses"
+        ]
+      }
+    },
     "/api/v1/purchases": {
       "get": {
         "operationId": "PurchasesController_list",
@@ -4702,6 +4740,21 @@
             "type": "string"
           },
           "notes": {
+            "type": "string",
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "occurrenceDate"
+        ]
+      },
+      "SkipRecurringExpenseDto": {
+        "type": "object",
+        "properties": {
+          "occurrenceDate": {
+            "type": "string"
+          },
+          "reason": {
             "type": "string",
             "maxLength": 300
           }

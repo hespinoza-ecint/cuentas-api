@@ -235,6 +235,7 @@ cuentas-api/
 - [Fase 23 — Modelo de cortes: pago para no generar intereses y anticipos (RN-17/RN-23)](docs/fase-23-modelo-de-cortes.md)
 - [Fase 24 — Línea de tiempo única: horizonte, recurrentes con tarjeta y anualidad](docs/fase-24-linea-de-tiempo.md)
 - [Fase 25 — Sesión y refresh robustos + idempotencia con reserva](docs/fase-25-sesion-e-idempotencia.md)
+- [Fase 26 — Integridad de movimientos y gastos recurrentes](docs/fase-26-integridad-recurrentes.md)
 
 ## Documentación técnica completa
 

@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { CashMovement } from '@prisma/client';
-import { NotFoundError } from '../../common/errors/http-errors';
+import { NotFoundError, UnprocessableEntityError } from '../../common/errors/http-errors';
 import { RequestMeta } from '../../common/http/request-meta';
 import { AuditService } from '../audit/audit.service';
 import { LedgerService } from '../ledger/ledger.service';
@@ -15,6 +15,15 @@ export interface PaginatedMovements {
   data: CashMovement[];
   meta: { limit: number; nextCursor: string | null; hasMore: boolean };
 }
+
+/** Movimientos generados por otro registro: se revierten desde su origen. */
+const DOMAIN_SOURCE_TYPES = new Set([
+  'Expense',
+  'IncomeTransaction',
+  'CardPayment',
+  'InstallmentPrepayment',
+  'Transfer',
+]);
 
 @Injectable()
 export class CashMovementsService {
@@ -85,6 +94,13 @@ export class CashMovementsService {
     meta: RequestMeta,
   ): Promise<CashMovement> {
     const movement = await this.get(userId, id);
+
+    if (movement.sourceType && DOMAIN_SOURCE_TYPES.has(movement.sourceType)) {
+      throw new UnprocessableEntityError(
+        'Este movimiento proviene de otro registro (gasto, ingreso, pago o transferencia). Corrigelo desde su propio reverso.',
+        { reason: 'MOVEMENT_HAS_SOURCE' },
+      );
+    }
 
     const reversal = await this.ledger.reverseMovement(userId, id, dto.reason, userId);
 

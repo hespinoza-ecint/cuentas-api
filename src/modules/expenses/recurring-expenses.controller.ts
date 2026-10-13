@@ -21,6 +21,7 @@ import { requestMeta } from '../../common/http/request-meta';
 import {
   ConfirmRecurringExpenseDto,
   CreateRecurringExpenseDto,
+  SkipRecurringExpenseDto,
   UpdateRecurringExpenseDto,
   UpcomingQueryDto,
 } from './dto/recurring-expense.dto';
@@ -101,5 +102,17 @@ export class RecurringExpensesController {
     @Req() request: FastifyRequest,
   ) {
     return this.recurringService.confirm(user.id, id, dto, requestMeta(request));
+  }
+
+  @Post(':id/skip')
+  @Idempotent()
+  @RequireVerifiedEmail()
+  skip(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SkipRecurringExpenseDto,
+    @Req() request: FastifyRequest,
+  ) {
+    return this.recurringService.skip(user.id, id, dto, requestMeta(request));
   }
 }

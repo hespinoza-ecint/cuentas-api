@@ -25,6 +25,7 @@ import { PurchasesService } from '../purchases/purchases.service';
 import {
   ConfirmRecurringExpenseDto,
   CreateRecurringExpenseDto,
+  SkipRecurringExpenseDto,
   UpdateRecurringExpenseDto,
   UpcomingQueryDto,
 } from './dto/recurring-expense.dto';
@@ -229,7 +230,8 @@ export class RecurringExpensesService {
         startDate: recurrence.startDate,
         endDate: recurrence.endDate,
         rule: recurrence.nonBusinessDayRule as NonBusinessDayRule,
-        holidays,
+        // RN-09: useHolidays=false solo conserva el ajuste por fin de semana.
+        holidays: recurrence.useHolidays ? holidays : new Set<string>(),
         from,
         // Los horizontes largos (proyeccion de flujo) necesitan mas fechas.
         limit: Math.min(settings.backdateLimitDays + days + 30, 2000),
@@ -239,19 +241,24 @@ export class RecurringExpensesService {
         continue;
       }
 
-      const [confirmedExpenses, confirmedPurchases] = await Promise.all([
+      const [confirmedExpenses, confirmedPurchases, skippedRows] = await Promise.all([
         this.repository.findExpensesByOccurrenceDates(recurrence.id, dates),
         this.repository.findPurchasesByOccurrenceDates(recurrence.id, dates),
+        this.prisma.recurringExpenseSkip.findMany({
+          where: { recurringExpenseId: recurrence.id, occurrenceDate: { in: dates } },
+          select: { occurrenceDate: true },
+        }),
       ]);
       const confirmedDates = new Set(
         [...confirmedExpenses, ...confirmedPurchases].map((entry) => entry.occurrenceDate),
       );
+      const skippedDates = new Set(skippedRows.map((entry) => entry.occurrenceDate));
 
       for (const expectedDate of dates) {
         if (compareLocalDates(expectedDate, horizon) > 0) {
           break;
         }
-        if (confirmedDates.has(expectedDate)) {
+        if (confirmedDates.has(expectedDate) || skippedDates.has(expectedDate)) {
           continue;
         }
         occurrences.push({
@@ -276,6 +283,95 @@ export class RecurringExpensesService {
     return { today, timezone: settings.timezone, horizonDays: days, occurrences: occurrences.slice(0, limit) };
   }
 
+  /**
+   * Valida que la fecha sea una ocurrencia real del calendario con el ajuste
+   * vigente (RN-08/RN-09): evita confirmar u omitir fechas crudas que dejarian
+   * la ocurrencia real pendiente y contada dos veces.
+   */
+  private async assertOccurrenceDate(
+    userId: string,
+    recurrence: RecurringExpense,
+    occurrenceDate: string,
+  ): Promise<void> {
+    const settings = await this.getSettings(userId);
+    const holidays = await this.holidays.getHolidaySet(
+      settings.holidayCalendarCode,
+      addDays(occurrenceDate, -60),
+      addDays(occurrenceDate, 60),
+    );
+    const dates = generateOccurrences({
+      config: this.parseStoredConfig(recurrence),
+      startDate: recurrence.startDate,
+      endDate: recurrence.endDate,
+      rule: recurrence.nonBusinessDayRule as NonBusinessDayRule,
+      holidays: recurrence.useHolidays ? holidays : new Set<string>(),
+      from: addDays(occurrenceDate, -45),
+      limit: 2000,
+    });
+
+    if (!dates.includes(occurrenceDate)) {
+      throw new UnprocessableEntityError(
+        'La fecha no corresponde a una ocurrencia del calendario.',
+        { reason: 'INVALID_OCCURRENCE_DATE' },
+      );
+    }
+  }
+
+  /** Omite una ocurrencia: deja de proyectarse sin crear gasto. */
+  async skip(
+    userId: string,
+    id: string,
+    dto: SkipRecurringExpenseDto,
+    meta: RequestMeta,
+  ): Promise<{ skipped: true }> {
+    const recurrence = await this.get(userId, id);
+    await this.assertOccurrenceDate(userId, recurrence, dto.occurrenceDate);
+
+    const [confirmedExpense, confirmedPurchase, existingSkip] = await Promise.all([
+      this.repository.findExpenseByOccurrence(id, dto.occurrenceDate),
+      this.repository.findPurchaseByOccurrence(id, dto.occurrenceDate),
+      this.prisma.recurringExpenseSkip.findUnique({
+        where: {
+          recurringExpenseId_occurrenceDate: {
+            recurringExpenseId: id,
+            occurrenceDate: dto.occurrenceDate,
+          },
+        },
+      }),
+    ]);
+    if (confirmedExpense || confirmedPurchase) {
+      throw new ConflictError('Esa ocurrencia ya fue confirmada.', {
+        reason: 'OCCURRENCE_ALREADY_CONFIRMED',
+      });
+    }
+    if (existingSkip) {
+      throw new ConflictError('Esa ocurrencia ya fue omitida.', {
+        reason: 'OCCURRENCE_ALREADY_SKIPPED',
+      });
+    }
+
+    await this.prisma.recurringExpenseSkip.create({
+      data: {
+        userId,
+        recurringExpenseId: id,
+        occurrenceDate: dto.occurrenceDate,
+        reason: dto.reason,
+      },
+    });
+
+    await this.audit.record({
+      action: 'recurring_expense.skipped',
+      entityType: 'RecurringExpense',
+      entityId: id,
+      userId,
+      actorUserId: userId,
+      changes: { occurrenceDate: dto.occurrenceDate, reason: dto.reason },
+      ...meta,
+    });
+
+    return { skipped: true };
+  }
+
   /** Confirma una ocurrencia: crea el gasto (efectivo) o la compra (tarjeta). */
   async confirm(
     userId: string,
@@ -284,14 +380,28 @@ export class RecurringExpensesService {
     meta: RequestMeta,
   ): Promise<RecurringConfirmation> {
     const recurrence = await this.get(userId, id);
+    await this.assertOccurrenceDate(userId, recurrence, dto.occurrenceDate);
 
-    const [confirmedExpense, confirmedPurchase] = await Promise.all([
+    const [confirmedExpense, confirmedPurchase, existingSkip] = await Promise.all([
       this.repository.findExpenseByOccurrence(id, dto.occurrenceDate),
       this.repository.findPurchaseByOccurrence(id, dto.occurrenceDate),
+      this.prisma.recurringExpenseSkip.findUnique({
+        where: {
+          recurringExpenseId_occurrenceDate: {
+            recurringExpenseId: id,
+            occurrenceDate: dto.occurrenceDate,
+          },
+        },
+      }),
     ]);
     if (confirmedExpense || confirmedPurchase) {
       throw new ConflictError('Esa ocurrencia ya fue confirmada.', {
         reason: 'OCCURRENCE_ALREADY_CONFIRMED',
+      });
+    }
+    if (existingSkip) {
+      throw new ConflictError('Esa ocurrencia ya fue omitida.', {
+        reason: 'OCCURRENCE_ALREADY_SKIPPED',
       });
     }
 

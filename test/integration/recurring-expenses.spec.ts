@@ -7,15 +7,30 @@ import {
   dayOfWeek,
   todayInTimeZone,
 } from '../../src/domain/shared/local-date';
+import { ClockService } from '../../src/infrastructure/clock/clock.module';
 import { authHeader, createCard, createCashAccount, createVerifiedUser } from '../helpers/api';
 import { createTestApp } from '../helpers/test-app';
 
 describe('Gastos recurrentes (integracion)', () => {
   let app: NestFastifyApplication;
 
+  let clock: ClockService;
+  let realNow: () => Date;
+
   beforeAll(async () => {
     app = await createTestApp();
+    clock = app.get(ClockService);
+    realNow = clock.now.bind(clock);
   });
+
+  afterEach(() => {
+    clock.now = realNow;
+  });
+
+  /** Simula la fecha actual (18:00Z = 12:00 en America/Mexico_City). */
+  function travelTo(date: string): void {
+    clock.now = () => new Date(`${date}T18:00:00Z`);
+  }
 
   afterAll(async () => {
     if (app) {
@@ -379,5 +394,159 @@ describe('Gastos recurrentes (integracion)', () => {
       .expect(200);
     expect(list.body[0].creditCard).toMatchObject({ id: card.id, alias: card.alias });
     expect(list.body[0].cashAccount).toMatchObject({ id: account.id });
+  });
+
+  it('omite una ocurrencia y ya no se proyecta ni se puede confirmar', async () => {
+    const user = await createVerifiedUser(app, 'recurring-skip');
+    const account = await createCashAccount(app, user.accessToken, { openingBalance: 100000 });
+    const today = todayInTimeZone('America/Mexico_City');
+    const futureDate = addDays(today, 4);
+
+    const created = await request(app.getHttpServer())
+      .post('/api/v1/recurring-expenses')
+      .set(...authHeader(user.accessToken))
+      .send({
+        name: 'Renta omitida',
+        amount: 30000,
+        paymentMethod: 'CASH_ACCOUNT',
+        cashAccountId: account.id,
+        schedule: {
+          frequency: 'CUSTOM',
+          config: { specificDates: [futureDate] },
+          nonBusinessDayRule: 'NONE',
+          startDate: today,
+        },
+      })
+      .expect(201);
+
+    // Una fecha que no es ocurrencia se rechaza.
+    const invalid = await request(app.getHttpServer())
+      .post(`/api/v1/recurring-expenses/${created.body.id}/skip`)
+      .set(...authHeader(user.accessToken))
+      .send({ occurrenceDate: addDays(today, 5) })
+      .expect(422);
+    expect(invalid.body.reason).toBe('INVALID_OCCURRENCE_DATE');
+
+    const skipped = await request(app.getHttpServer())
+      .post(`/api/v1/recurring-expenses/${created.body.id}/skip`)
+      .set(...authHeader(user.accessToken))
+      .send({ occurrenceDate: futureDate, reason: 'No se pago este periodo' })
+      .expect(201);
+    expect(skipped.body.skipped).toBe(true);
+
+    const upcoming = await request(app.getHttpServer())
+      .get('/api/v1/recurring-expenses/upcoming')
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(upcoming.body.occurrences).toHaveLength(0);
+
+    const doubleSkip = await request(app.getHttpServer())
+      .post(`/api/v1/recurring-expenses/${created.body.id}/skip`)
+      .set(...authHeader(user.accessToken))
+      .send({ occurrenceDate: futureDate })
+      .expect(409);
+    expect(doubleSkip.body.reason).toBe('OCCURRENCE_ALREADY_SKIPPED');
+
+    const confirm = await request(app.getHttpServer())
+      .post(`/api/v1/recurring-expenses/${created.body.id}/confirm`)
+      .set(...authHeader(user.accessToken))
+      .send({ occurrenceDate: futureDate })
+      .expect(409);
+    expect(confirm.body.reason).toBe('OCCURRENCE_ALREADY_SKIPPED');
+  });
+
+  it('un gasto revertido libera su ocurrencia para confirmarla de nuevo', async () => {
+    const user = await createVerifiedUser(app, 'recurring-reconfirm');
+    const account = await createCashAccount(app, user.accessToken, { openingBalance: 100000 });
+    const today = todayInTimeZone('America/Mexico_City');
+
+    const created = await request(app.getHttpServer())
+      .post('/api/v1/recurring-expenses')
+      .set(...authHeader(user.accessToken))
+      .send({
+        name: 'Luz',
+        amount: 20000,
+        paymentMethod: 'CASH_ACCOUNT',
+        cashAccountId: account.id,
+        schedule: {
+          frequency: 'CUSTOM',
+          config: { specificDates: [today] },
+          nonBusinessDayRule: 'NONE',
+          startDate: today,
+        },
+      })
+      .expect(201);
+
+    const first = await request(app.getHttpServer())
+      .post(`/api/v1/recurring-expenses/${created.body.id}/confirm`)
+      .set(...authHeader(user.accessToken))
+      .send({ occurrenceDate: today })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post(`/api/v1/expenses/${first.body.expenseId}/reverse`)
+      .set(...authHeader(user.accessToken))
+      .send({ reason: 'Cargo duplicado del banco' })
+      .expect(201);
+
+    // La ocurrencia vuelve a proyectarse y se puede confirmar otra vez.
+    const upcoming = await request(app.getHttpServer())
+      .get('/api/v1/recurring-expenses/upcoming')
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(upcoming.body.occurrences).toHaveLength(1);
+    expect(upcoming.body.occurrences[0].expectedDate).toBe(today);
+
+    const second = await request(app.getHttpServer())
+      .post(`/api/v1/recurring-expenses/${created.body.id}/confirm`)
+      .set(...authHeader(user.accessToken))
+      .send({ occurrenceDate: today })
+      .expect(201);
+    expect(second.body.expenseId).not.toBe(first.body.expenseId);
+  });
+
+  it('useHolidays=false no mueve las ocurrencias del recurrente', async () => {
+    // Viernes 30 de octubre de 2026; el lunes 2 de noviembre es inhabile bancario.
+    travelTo('2026-10-30');
+    const user = await createVerifiedUser(app, 'recurring-holidays');
+    const account = await createCashAccount(app, user.accessToken);
+
+    const cases = [
+      { name: 'Con festivos', useHolidays: true, expected: '2026-10-30' },
+      { name: 'Sin festivos', useHolidays: false, expected: '2026-11-02' },
+    ];
+
+    for (const entry of cases) {
+      await request(app.getHttpServer())
+        .post('/api/v1/recurring-expenses')
+        .set(...authHeader(user.accessToken))
+        .send({
+          name: entry.name,
+          amount: 10000,
+          paymentMethod: 'CASH_ACCOUNT',
+          cashAccountId: account.id,
+          schedule: {
+            frequency: 'CUSTOM',
+            config: { specificDates: ['2026-11-02'] },
+            nonBusinessDayRule: 'PREVIOUS',
+            useHolidays: entry.useHolidays,
+            startDate: '2026-10-30',
+          },
+        })
+        .expect(201);
+    }
+
+    const upcoming = await request(app.getHttpServer())
+      .get('/api/v1/recurring-expenses/upcoming')
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+
+    const datesByName = new Map(
+      (upcoming.body.occurrences as Array<{ name: string; expectedDate: string }>).map(
+        (occurrence) => [occurrence.name, occurrence.expectedDate],
+      ),
+    );
+    expect(datesByName.get('Con festivos')).toBe('2026-10-30');
+    expect(datesByName.get('Sin festivos')).toBe('2026-11-02');
   });
 });

@@ -126,7 +126,17 @@ export class ExpensesService {
         tx,
       );
 
-      await tx.expense.update({ where: { id }, data: { status: 'REVERSED' } });
+      await tx.expense.update({
+        where: { id },
+        data: {
+          status: 'REVERSED',
+          // Libera la ocurrencia del calendario: volver a capturar el gasto
+          // (confirmar el recurrente) debe funcionar.
+          ...(expense.recurringExpenseId && expense.occurrenceDate
+            ? { occurrenceDate: null }
+            : {}),
+        },
+      });
 
       await this.audit.record(
         {

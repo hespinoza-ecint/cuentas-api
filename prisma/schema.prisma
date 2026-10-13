@@ -48,6 +48,7 @@ model User {
   incomeSchedules    IncomeSchedule[]
   incomeTransactions IncomeTransaction[]
   recurringExpenses  RecurringExpense[]
+  recurringExpenseSkips RecurringExpenseSkip[]
   expenses           Expense[]
   creditCards        CreditCard[]
   cardLedgerEntries  CardLedgerEntry[]
@@ -374,8 +375,25 @@ model RecurringExpense {
   category    Category?    @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   expenses    Expense[]
   purchases   Purchase[]
+  skips       RecurringExpenseSkip[]
 
   @@index([userId, isActive])
+}
+
+/// Ocurrencia omitida de un gasto recurrente: deja de proyectarse sin crear gasto.
+model RecurringExpenseSkip {
+  id                 String   @id @default(uuid())
+  userId             String
+  recurringExpenseId String
+  occurrenceDate     String
+  reason             String?
+  createdAt          DateTime @default(now())
+
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recurringExpense RecurringExpense @relation(fields: [recurringExpenseId], references: [id], onDelete: Cascade)
+
+  @@unique([recurringExpenseId, occurrenceDate])
+  @@index([userId])
 }
 
 /// Gasto pagado con una cuenta de efectivo (RN-25). Siempre ligado a un movimiento.

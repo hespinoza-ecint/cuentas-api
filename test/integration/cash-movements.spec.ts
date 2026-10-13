@@ -165,4 +165,39 @@ describe('Movimientos de efectivo (integracion)', () => {
       .set(...authHeader(otherUser.accessToken))
       .expect(404);
   });
+
+  it('rechaza revertir el movimiento de un gasto: se usa el reverso del gasto', async () => {
+    const user = await createVerifiedUser(app, 'guard');
+    const account = await createCashAccount(app, user.accessToken, { openingBalance: 100000 });
+    const today = todayInTimeZone('America/Mexico_City');
+
+    await request(app.getHttpServer())
+      .post('/api/v1/expenses')
+      .set(...authHeader(user.accessToken))
+      .send({ cashAccountId: account.id, description: 'Cena', amount: 5000, expenseDate: today })
+      .expect(201);
+
+    const movements = await request(app.getHttpServer())
+      .get(`/api/v1/cash-movements?cashAccountId=${account.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+
+    const expenseMovement = (movements.body.data as Array<{ id: string; sourceType?: string }>).find(
+      (movement) => movement.sourceType === 'Expense',
+    );
+    expect(expenseMovement).toBeDefined();
+
+    const blocked = await request(app.getHttpServer())
+      .post(`/api/v1/cash-movements/${expenseMovement?.id}/reverse`)
+      .set(...authHeader(user.accessToken))
+      .send({ reason: 'Prueba' })
+      .expect(422);
+    expect(blocked.body.reason).toBe('MOVEMENT_HAS_SOURCE');
+
+    const accountAfter = await request(app.getHttpServer())
+      .get(`/api/v1/cash-accounts/${account.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(accountAfter.body.currentBalance).toBe(95000);
+  });
 });

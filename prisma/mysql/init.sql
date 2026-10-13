@@ -287,6 +287,20 @@ CREATE TABLE `RecurringExpense` (
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- CreateTable
+CREATE TABLE `RecurringExpenseSkip` (
+    `id` VARCHAR(191) NOT NULL,
+    `userId` VARCHAR(191) NOT NULL,
+    `recurringExpenseId` VARCHAR(191) NOT NULL,
+    `occurrenceDate` VARCHAR(191) NOT NULL,
+    `reason` TEXT NULL,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+
+    INDEX `RecurringExpenseSkip_userId_idx`(`userId`),
+    UNIQUE INDEX `RecurringExpenseSkip_recurringExpenseId_occurrenceDate_key`(`recurringExpenseId`, `occurrenceDate`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
 CREATE TABLE `Expense` (
     `id` VARCHAR(191) NOT NULL,
     `userId` VARCHAR(191) NOT NULL,
@@ -634,6 +648,12 @@ ALTER TABLE `RecurringExpense` ADD CONSTRAINT `RecurringExpense_creditCardId_fke
 
 -- AddForeignKey
 ALTER TABLE `RecurringExpense` ADD CONSTRAINT `RecurringExpense_categoryId_fkey` FOREIGN KEY (`categoryId`) REFERENCES `Category`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `RecurringExpenseSkip` ADD CONSTRAINT `RecurringExpenseSkip_userId_fkey` FOREIGN KEY (`userId`) REFERENCES `User`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `RecurringExpenseSkip` ADD CONSTRAINT `RecurringExpenseSkip_recurringExpenseId_fkey` FOREIGN KEY (`recurringExpenseId`) REFERENCES `RecurringExpense`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE `Expense` ADD CONSTRAINT `Expense_userId_fkey` FOREIGN KEY (`userId`) REFERENCES `User`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;

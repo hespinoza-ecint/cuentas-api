@@ -161,6 +161,17 @@ export class ConfirmRecurringExpenseDto {
   notes?: string;
 }
 
+export class SkipRecurringExpenseDto {
+  @IsLocalDate({ message: 'occurrenceDate debe ser una fecha valida YYYY-MM-DD' })
+  occurrenceDate!: string;
+
+  @IsOptional()
+  @Transform(trim)
+  @IsString({ message: 'reason debe ser texto' })
+  @MaxLength(300, { message: 'reason no debe exceder 300 caracteres' })
+  reason?: string;
+}
+
 export class UpcomingQueryDto {
   @IsOptional()
   @Type(() => Number)

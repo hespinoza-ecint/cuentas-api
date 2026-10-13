@@ -5,6 +5,7 @@ import {
   dayOfWeek,
   todayInTimeZone,
 } from '../../src/domain/shared/local-date';
+import { ClockService } from '../../src/infrastructure/clock/clock.module';
 import {
   authHeader,
   CashAccountFixture,
@@ -17,9 +18,23 @@ import { createTestApp } from '../helpers/test-app';
 describe('Ingresos (integracion)', () => {
   let app: NestFastifyApplication;
 
+  let clock: ClockService;
+  let realNow: () => Date;
+
   beforeAll(async () => {
     app = await createTestApp();
+    clock = app.get(ClockService);
+    realNow = clock.now.bind(clock);
   });
+
+  afterEach(() => {
+    clock.now = realNow;
+  });
+
+  /** Simula la fecha actual (18:00Z = 12:00 en America/Mexico_City). */
+  function travelTo(date: string): void {
+    clock.now = () => new Date(`${date}T18:00:00Z`);
+  }
 
   afterAll(async () => {
     if (app) {
@@ -296,5 +311,87 @@ describe('Ingresos (integracion)', () => {
         expectedDate: addDays(today, 2),
       })
       .expect(404);
+  });
+
+  it('useHolidays=false no mueve las fechas por dias festivos (RN-09)', async () => {
+    // Viernes 30 de octubre de 2026; el lunes 2 de noviembre es inhabile bancario.
+    travelTo('2026-10-30');
+    const user = await createVerifiedUser(app, 'income-holidays');
+    const account = await createCashAccount(app, user.accessToken);
+
+    const cases = [
+      { name: 'Con festivos', useHolidays: true, expected: '2026-10-30' },
+      { name: 'Sin festivos', useHolidays: false, expected: '2026-11-02' },
+    ];
+
+    for (const entry of cases) {
+      await createSource(user, account, {
+        name: entry.name,
+        estimatedAmount: 100000,
+        schedules: [
+          {
+            frequency: 'CUSTOM',
+            config: { specificDates: ['2026-11-02'] },
+            nonBusinessDayRule: 'PREVIOUS',
+            useHolidays: entry.useHolidays,
+            startDate: '2026-10-30',
+          },
+        ],
+      });
+    }
+
+    const upcoming = await request(app.getHttpServer())
+      .get('/api/v1/income/upcoming?days=30')
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+
+    const datesByName = new Map(
+      (upcoming.body.occurrences as Array<{ incomeSourceName: string; expectedDate: string }>).map(
+        (occurrence) => [occurrence.incomeSourceName, occurrence.expectedDate],
+      ),
+    );
+    expect(datesByName.get('Con festivos')).toBe('2026-10-30');
+    expect(datesByName.get('Sin festivos')).toBe('2026-11-02');
+  });
+
+  it('rechaza confirmar u omitir una fecha que no es ocurrencia del calendario', async () => {
+    const user = await createVerifiedUser(app, 'income-invalid-date');
+    const account = await createCashAccount(app, user.accessToken);
+    const today = todayInTimeZone('America/Mexico_City');
+
+    const source = await createSource(user, account, {
+      name: 'Quincena',
+      estimatedAmount: 100000,
+      schedules: [
+        {
+          frequency: 'CUSTOM',
+          config: { specificDates: [addDays(today, 5)] },
+          nonBusinessDayRule: 'NONE',
+          startDate: today,
+        },
+      ],
+    });
+
+    const badConfirm = await request(app.getHttpServer())
+      .post('/api/v1/income/transactions/confirm')
+      .set(...authHeader(user.accessToken))
+      .send({
+        incomeSourceId: source.id,
+        incomeScheduleId: source.schedules[0].id,
+        expectedDate: addDays(today, 6),
+      })
+      .expect(422);
+    expect(badConfirm.body.reason).toBe('INVALID_OCCURRENCE_DATE');
+
+    const badSkip = await request(app.getHttpServer())
+      .post('/api/v1/income/transactions/skip')
+      .set(...authHeader(user.accessToken))
+      .send({
+        incomeSourceId: source.id,
+        incomeScheduleId: source.schedules[0].id,
+        expectedDate: addDays(today, 6),
+      })
+      .expect(422);
+    expect(badSkip.body.reason).toBe('INVALID_OCCURRENCE_DATE');
   });
 });

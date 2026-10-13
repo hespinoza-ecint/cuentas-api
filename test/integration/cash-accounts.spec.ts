@@ -1,6 +1,6 @@
 import { NestFastifyApplication } from '@nestjs/platform-fastify';
 import request from 'supertest';
-import { todayInTimeZone } from '../../src/domain/shared/local-date';
+import { addDays, todayInTimeZone } from '../../src/domain/shared/local-date';
 import { PrismaService } from '../../src/infrastructure/prisma/prisma.service';
 import {
   authHeader,
@@ -176,5 +176,67 @@ describe('Cuentas de efectivo (integracion)', () => {
       .get(`/api/v1/cash-accounts/${account.id}`)
       .set(...authHeader(userB.accessToken))
       .expect(404);
+  });
+
+  it('no elimina una cuenta en uso por un recurrente activo o una fuente de ingreso', async () => {
+    const user = await createVerifiedUser(app, 'account-in-use');
+    const today = todayInTimeZone('America/Mexico_City');
+    const futureDate = addDays(today, 3);
+
+    const withRecurring = await createCashAccount(app, user.accessToken);
+    await request(app.getHttpServer())
+      .post('/api/v1/recurring-expenses')
+      .set(...authHeader(user.accessToken))
+      .send({
+        name: 'Renta',
+        amount: 30000,
+        paymentMethod: 'CASH_ACCOUNT',
+        cashAccountId: withRecurring.id,
+        schedule: {
+          frequency: 'CUSTOM',
+          config: { specificDates: [futureDate] },
+          nonBusinessDayRule: 'NONE',
+          startDate: today,
+        },
+      })
+      .expect(201);
+
+    const blockedRecurring = await request(app.getHttpServer())
+      .delete(`/api/v1/cash-accounts/${withRecurring.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(422);
+    expect(blockedRecurring.body.reason).toBe('ACCOUNT_IN_USE');
+
+    const withIncome = await createCashAccount(app, user.accessToken);
+    await request(app.getHttpServer())
+      .post('/api/v1/income/sources')
+      .set(...authHeader(user.accessToken))
+      .send({
+        name: 'Nomina',
+        cashAccountId: withIncome.id,
+        estimatedAmount: 100000,
+        schedules: [
+          {
+            frequency: 'CUSTOM',
+            config: { specificDates: [futureDate] },
+            nonBusinessDayRule: 'NONE',
+            startDate: today,
+          },
+        ],
+      })
+      .expect(201);
+
+    const blockedIncome = await request(app.getHttpServer())
+      .delete(`/api/v1/cash-accounts/${withIncome.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(422);
+    expect(blockedIncome.body.reason).toBe('ACCOUNT_IN_USE');
+
+    // Una cuenta sin referencias si se elimina.
+    const clean = await createCashAccount(app, user.accessToken);
+    await request(app.getHttpServer())
+      .delete(`/api/v1/cash-accounts/${clean.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(204);
   });
 });

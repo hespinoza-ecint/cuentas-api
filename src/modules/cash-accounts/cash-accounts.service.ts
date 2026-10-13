@@ -155,6 +155,21 @@ export class CashAccountsService {
       );
     }
 
+    const [incomeSources, recurringExpenses] = await Promise.all([
+      this.prisma.incomeSource.count({
+        where: { userId, cashAccountId: id, deletedAt: null },
+      }),
+      this.prisma.recurringExpense.count({
+        where: { userId, cashAccountId: id, isActive: true },
+      }),
+    ]);
+    if (incomeSources > 0 || recurringExpenses > 0) {
+      throw new UnprocessableEntityError(
+        'La cuenta esta en uso por ingresos o gastos recurrentes activos. Desactivalos o cambialos de cuenta antes de eliminarla.',
+        { reason: 'ACCOUNT_IN_USE' },
+      );
+    }
+
     await this.prisma.$transaction(async (tx) => {
       await this.accounts.update(id, { deletedAt: new Date(), isDefault: false }, tx);
 

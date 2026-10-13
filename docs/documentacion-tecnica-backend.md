@@ -1235,7 +1235,7 @@ Los días que no existen en un mes se ajustan al último día. Las fechas se aju
 | RN-06 | Movimientos con fecha pasada hasta `backdateLimitDays` (60) | `FinancialDatePolicy.assertAllowed` |
 | RN-07 | Sin fechas futuras en movimientos; lo futuro son programaciones | `FinancialDatePolicy` (error `FUTURE_DATE_NOT_ALLOWED`) |
 | RN-08 | Quincena default días 15 y último del mes | `parseScheduleConfig('BIWEEKLY')` |
-| RN-09 | Día inhábil → día hábil anterior (configurable) | `business-calendar.ts` + `nonBusinessDayRule` |
+| RN-09 | Día inhábil → día hábil anterior (configurable); `useHolidays=false` conserva solo el ajuste por fin de semana | `business-calendar.ts` + `nonBusinessDayRule` |
 | RN-10 | Ingresos variables se proyectan al 90% (configurable) | `IncomeService.projectedAmount` con `variableIncomeFactorBps` |
 | RN-11 | Ingreso vencido sin confirmar deja de proyectarse tras N días | `IncomeService.upcoming` (`pendingIncomeGraceDays`) |
 | RN-12 | Corte = día fijo; si no existe, último del mes; nunca se ajusta | `card-cycle.cutDateForMonth` |
@@ -1267,10 +1267,12 @@ Los días que no existen en un mes se ajustan al último día. Las fechas se aju
 |---|---|---|
 | Una cuenta predeterminada por usuario | Al marcar `isDefault` se desmarca la anterior; la primera cuenta nace default | — |
 | Cuenta con saldo no se elimina | `currentBalance !== 0` → 422 | `ACCOUNT_WITH_BALANCE` |
+| Cuenta en uso no se elimina | Ingresos o recurrentes activos que la referencian → 422 | `ACCOUNT_IN_USE` |
 | Cuenta inactiva no opera | Movimientos/pagos bloqueados | `ACCOUNT_INACTIVE` |
 | Saldo inicial único por cuenta | Segundo intento → 409 | `OPENING_BALANCE_EXISTS` |
 | Transferencias a la misma cuenta | Bloqueado | `SAME_ACCOUNT` |
 | Un movimiento solo se revierte una vez | Índice único en `reverses*Id` | `ALREADY_REVERSED` |
+| Movimientos con origen se revierten desde su registro | Gasto/ingreso/pago/transferencia → 422 | `MOVEMENT_HAS_SOURCE` |
 | Un reverso no se revierte | Validación explícita | `CANNOT_REVERSE_REVERSAL` |
 | Reenviar verificación invalida el token anterior | `invalidatePending` | — |
 | Tokens de un solo uso | `usedAt` | `INVALID_VERIFICATION_TOKEN` / `INVALID_RESET_TOKEN` |
@@ -1284,6 +1286,9 @@ Los días que no existen en un mes se ajustan al último día. Las fechas se aju
 | Cuenta en eliminación solo puede cancelar/exportar/logout | `PendingDeletionGuard` lógico | `PENDING_DELETION` (403) |
 | Purga definitiva a los 30 días | Cron diario 03:00 + endpoint admin | — |
 | Mensualidad duplicada | Único `(planId, number)` / `(recurringExpenseId, occurrenceDate)` | `OCCURRENCE_ALREADY_*` |
+| Confirmar/omitir exige una ocurrencia real | 422 si la fecha no esta en el calendario ajustado vigente | `INVALID_OCCURRENCE_DATE` |
+| Omitir una ocurrencia de recurrente | Deja de proyectarse (tabla `RecurringExpenseSkip`); confirmarla despues → 409 | `OCCURRENCE_ALREADY_SKIPPED` |
+| Gasto revertido | Libera su ocurrencia para poder reconfirmarla | — |
 | Compra cancelable solo sin pagos | 422 si hay mensualidades con pago | `PLAN_HAS_PAYMENTS` |
 | Pago no puede exceder saldo | 422 | `PAYMENT_EXCEEDS_BALANCE`, `CARD_WITHOUT_BALANCE` |
 | Cambio de día de corte bloqueado con historial | Cortes emitidos o mensualidades existentes → 422 | `CUT_DAY_LOCKED` |
@@ -1813,6 +1818,7 @@ Errores: `409 OCCURRENCE_ALREADY_REGISTERED`, `404 INCOME_SOURCE_NOT_FOUND`, `40
 | DELETE | `/recurring-expenses/:id` | Borrado lógico |
 | GET | `/recurring-expenses/:id/upcoming` | Próximas de uno |
 | POST | `/recurring-expenses/:id/confirm` | Confirma ocurrencia → gasto + movimiento (efectivo) o compra + cargo (tarjeta) |
+| POST | `/recurring-expenses/:id/skip` | Omite una ocurrencia: deja de proyectarse (409 al confirmarla después) |
 
 **POST /recurring-expenses → 201**
 ```json
@@ -4765,6 +4771,44 @@ Tipos de evento: `INCOME`, `RECURRING_EXPENSE`, `CARD_STATEMENT`, `INSTALLMENT`,
         ]
       }
     },
+    "/api/v1/recurring-expenses/{id}/skip": {
+      "post": {
+        "operationId": "RecurringExpensesController_skip",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkipRecurringExpenseDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "recurring-expenses"
+        ]
+      }
+    },
     "/api/v1/purchases": {
       "get": {
         "operationId": "PurchasesController_list",
@@ -6864,6 +6908,21 @@ Tipos de evento: `INCOME`, `RECURRING_EXPENSE`, `CARD_STATEMENT`, `INSTALLMENT`,
             "type": "string"
           },
           "notes": {
+            "type": "string",
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "occurrenceDate"
+        ]
+      },
+      "SkipRecurringExpenseDto": {
+        "type": "object",
+        "properties": {
+          "occurrenceDate": {
+            "type": "string"
+          },
+          "reason": {
             "type": "string",
             "maxLength": 300
           }

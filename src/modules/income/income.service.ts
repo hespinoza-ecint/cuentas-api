@@ -349,7 +349,8 @@ export class IncomeService {
           startDate: schedule.startDate,
           endDate: schedule.endDate,
           rule: schedule.nonBusinessDayRule as NonBusinessDayRule,
-          holidays,
+          // RN-09: useHolidays=false solo conserva el ajuste por fin de semana.
+          holidays: schedule.useHolidays ? holidays : new Set<string>(),
           from,
           // Los horizontes largos (proyeccion de flujo) necesitan mas fechas.
           limit: Math.min(settings.pendingIncomeGraceDays + days + 30, 2000),
@@ -388,6 +389,40 @@ export class IncomeService {
     };
   }
 
+  /**
+   * Valida que la fecha sea una ocurrencia real del calendario con el ajuste
+   * vigente (RN-08/RN-09): evita registrar fechas crudas que dejarian la
+   * ocurrencia real pendiente y contada dos veces.
+   */
+  private async assertOccurrenceDate(
+    userId: string,
+    schedule: IncomeSchedule,
+    occurrenceDate: string,
+  ): Promise<void> {
+    const settings = await this.getSettings(userId);
+    const holidays = await this.holidays.getHolidaySet(
+      settings.holidayCalendarCode,
+      addDays(occurrenceDate, -60),
+      addDays(occurrenceDate, 60),
+    );
+    const dates = generateOccurrences({
+      config: this.parseStoredConfig(schedule),
+      startDate: schedule.startDate,
+      endDate: schedule.endDate,
+      rule: schedule.nonBusinessDayRule as NonBusinessDayRule,
+      holidays: schedule.useHolidays ? holidays : new Set<string>(),
+      from: addDays(occurrenceDate, -45),
+      limit: 2000,
+    });
+
+    if (!dates.includes(occurrenceDate)) {
+      throw new UnprocessableEntityError(
+        'La fecha no corresponde a una ocurrencia del calendario.',
+        { reason: 'INVALID_OCCURRENCE_DATE' },
+      );
+    }
+  }
+
   /** Confirma el ingreso real; puede diferir del estimado (RN-10 y RN-11). */
   async confirm(userId: string, dto: ConfirmIncomeDto, meta: RequestMeta): Promise<IncomeTransaction> {
     const source = await this.repository.findSource(userId, dto.incomeSourceId);
@@ -403,6 +438,8 @@ export class IncomeService {
         reason: 'SCHEDULE_MISMATCH',
       });
     }
+
+    await this.assertOccurrenceDate(userId, schedule, dto.expectedDate);
 
     const settings = await this.getSettings(userId);
     const today = this.clock.today(settings.timezone);
@@ -491,6 +528,8 @@ export class IncomeService {
         reason: 'SCHEDULE_MISMATCH',
       });
     }
+
+    await this.assertOccurrenceDate(userId, schedule, dto.expectedDate);
 
     return this.prisma.$transaction(async (tx) => {
       const existing = await this.repository.findTransaction(schedule.id, dto.expectedDate, tx);
