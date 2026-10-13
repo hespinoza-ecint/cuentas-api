@@ -236,6 +236,7 @@ cuentas-api/
 - [Fase 24 — Línea de tiempo única: horizonte, recurrentes con tarjeta y anualidad](docs/fase-24-linea-de-tiempo.md)
 - [Fase 25 — Sesión y refresh robustos + idempotencia con reserva](docs/fase-25-sesion-e-idempotencia.md)
 - [Fase 26 — Integridad de movimientos y gastos recurrentes](docs/fase-26-integridad-recurrentes.md)
+- [Fase 27 — Intereses e IVA de compras diferidas en el libro (RN-20)](docs/fase-27-intereses-en-el-libro.md)
 
 ## Documentación técnica completa
 

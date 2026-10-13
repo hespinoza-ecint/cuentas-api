@@ -1246,8 +1246,8 @@ Los días que no existen en un mes se ajustan al último día. Las fechas se aju
 | RN-17 | Pago para no generar intereses = cargos regulares + mensualidades exigidas por su **monto completo** + saldo anterior no cubierto; sobrescribible | `StatementsService.sync` (`noInterestPaymentCalc`, `periodCharges`) |
 | RN-18 | MSI/diferidas ocupan el monto completo del crédito y lo liberan al pagar | Entrada `PURCHASE` por el total; pagos reducen el saldo |
 | RN-19 | Primera mensualidad en el corte de la compra; residuo en la última | `cutDateForPurchase` + `buildMsiSchedule`/`buildFrenchSchedule` |
-| RN-20 | Diferidas: cuota fija capital+interés (francesa) e IVA 16% sobre el interés sumado al pago; comisión configurable | `amortization.ts` |
-| RN-21 | Anticipos reducen plazo por defecto | `prepay` (`REDUCE_TERM`); `REDUCE_PAYMENT` responde 422 |
+| RN-20 | Diferidas: cuota fija capital+interés (francesa) e IVA 16% sobre el interés sumado al pago; comisión configurable; los intereses/IVA/comisión se cargan al libro al facturarse cada mensualidad (idempotente; también al pagar por adelantado) | `amortization.ts` + `StatementsService.ensureBillingEntries` |
+| RN-21 | Anticipos reducen plazo por defecto; el tope es el pendiente del plan (incluye intereses aun no facturados), no el saldo de la tarjeta | `prepay` (`REDUCE_TERM`); `REDUCE_PAYMENT` responde 422 |
 | RN-22 | Interés estimado = saldo × tasa/360 × días × 1.16 en cortes vencidos | `StatementsService.withEstimatedInterest` (`estimatedInterest`) |
 | RN-23 | Pagos: primero mensualidades exigibles, luego cargos del corte, luego revolvente; al materializar cada corte se adoptan los anticipos del ciclo abierto (el sobrante pasa al siguiente corte) | `applyPaymentAllocations` + `StatementsService.adoptOrphanAllocations` |
 | RN-24 | Anualidad como cargo al corte: una proyección por año dentro de la ventana, pagadera en la fecha límite del corte que la cobra | Obligación `Anualidad {alias}` en flujo, dashboard y recomendaciones |
@@ -1317,6 +1317,7 @@ Los días que no existen en un mes se ajustan al último día. Las fechas se aju
 | Facturación de mensualidades | Sync de cortes | `SCHEDULED → BILLED` + `statementId` (también las pagadas parcialmente por anticipos) |
 | Cálculo de pago para no generar intereses | Sync | Cargos regulares + mensualidades exigibles (monto completo) + saldo anterior no cubierto |
 | Adopción de anticipos del ciclo abierto | Sync de cortes | Las asignaciones huérfanas se abonan al corte más antiguo con saldo (dividiendo la asignación si sobra); el sobrante queda revolvente |
+| Intereses de diferidas en el libro | Sync de cortes | `INTEREST`/`FEE` por mensualidad facturada o pagada con la app (idempotente por mensualidad; el historial al corriente no se carga) |
 | Deuda proyectada por tarjeta | Flujo/dashboard | Último corte no pagado + corte próximo por cerrar (ciclo abierto + mensualidades − anticipos) |
 | Recorte por horizonte | Contexto de flujo | Ingresos, gastos y obligaciones se recortan a `[hoy, hoy + N días]`; el motor de recomendaciones además recorta al fin del plan evaluado |
 | Anualidad por año | Flujo/dashboard/recomendaciones | Una proyección por año dentro de la ventana, fechada en la fecha límite del corte que la cobra |

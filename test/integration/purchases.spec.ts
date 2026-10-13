@@ -2,6 +2,7 @@ import { NestFastifyApplication } from '@nestjs/platform-fastify';
 import request from 'supertest';
 import { cutDateForPurchase } from '../../src/domain/cards/card-cycle';
 import { addDays, addMonths, compareLocalDates, todayInTimeZone } from '../../src/domain/shared/local-date';
+import { ClockService } from '../../src/infrastructure/clock/clock.module';
 import {
   authHeader,
   createCard,
@@ -14,9 +15,23 @@ import { createTestApp } from '../helpers/test-app';
 describe('Compras y mensualidades (integracion)', () => {
   let app: NestFastifyApplication;
 
+  let clock: ClockService;
+  let realNow: () => Date;
+
   beforeAll(async () => {
     app = await createTestApp();
+    clock = app.get(ClockService);
+    realNow = clock.now.bind(clock);
   });
+
+  afterEach(() => {
+    clock.now = realNow;
+  });
+
+  /** Simula la fecha actual (18:00Z = 12:00 en America/Mexico_City). */
+  function travelTo(date: string): void {
+    clock.now = () => new Date(`${date}T18:00:00Z`);
+  }
 
   afterAll(async () => {
     if (app) {
@@ -893,5 +908,170 @@ describe('Compras y mensualidades (integracion)', () => {
       .expect(200);
 
     expect(response.body.meta.limit).toBe(20);
+  });
+
+  async function createDeferredPlan(user: TestUser, openingBalance?: number) {
+    const card = await createCard(app, user.accessToken, { creditLimit: 3000000 });
+    const account = await createCashAccount(app, user.accessToken, {
+      openingBalance: openingBalance ?? 500000,
+    });
+    const purchase = await createPurchase(user, {
+      creditCardId: card.id,
+      description: 'Muebles diferidos',
+      amount: 120000,
+      purchaseDate: '2026-09-10',
+      type: 'DEFERRED_INTEREST',
+      months: 6,
+      annualRateBps: 2400,
+    });
+    return { card, account, purchase, first: purchase.installmentPlan.installments[0] };
+  }
+
+  it('registra los intereses y el IVA de una diferida en el libro al facturarse', async () => {
+    travelTo('2026-10-12');
+    const user = await createVerifiedUser(app, 'deferred-ledger');
+    const { card, first } = await createDeferredPlan(user);
+    expect(first.interest).toBeGreaterThan(0);
+    expect(first.statementCutDate).toBe('2026-09-15');
+
+    // El corte ya exigia la mensualidad completa (sin cambios).
+    const statements = await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}/statements`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    const september = (statements.body as Array<{ cutDate: string; noInterestPaymentCalc: number }>)
+      .find((statement) => statement.cutDate === '2026-09-15');
+    expect(september?.noInterestPaymentCalc).toBe(first.totalAmount);
+
+    // El libro ya carga principal + intereses e IVA facturados.
+    const cardAfter = await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(cardAfter.body.currentBalance).toBe(120000 + first.interest + first.iva);
+
+    const ledger = await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}/ledger?limit=100`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    const entries = ledger.body.data as Array<{ type: string; amount: number }>;
+    const interestEntries = entries.filter((entry) => entry.type === 'INTEREST');
+    const feeEntries = entries.filter((entry) => entry.type === 'FEE');
+    expect(interestEntries).toHaveLength(1);
+    expect(interestEntries[0].amount).toBe(first.interest);
+    expect(feeEntries).toHaveLength(1);
+    expect(feeEntries[0].amount).toBe(first.iva);
+
+    // Un segundo sync no duplica las entradas.
+    await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}/statements`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    const ledgerAgain = await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}/ledger?limit=100`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(
+      (ledgerAgain.body.data as Array<{ type: string }>).filter(
+        (entry) => entry.type === 'INTEREST',
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('permite liquidar una diferida aunque falten intereses por facturar', async () => {
+    travelTo('2026-10-12');
+    const user = await createVerifiedUser(app, 'deferred-payoff');
+    const { card, account, purchase } = await createDeferredPlan(user);
+
+    const totalRemaining = (
+      purchase.installmentPlan.installments as Array<{ totalAmount: number }>
+    ).reduce((sum, installment) => sum + installment.totalAmount, 0);
+    // El saldo del libro (principal + solo intereses facturados) es menor que
+    // el pendiente del plan: aun asi la liquidacion debe proceder.
+    const cardBefore = await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(cardBefore.body.currentBalance).toBeLessThan(totalRemaining);
+
+    const payoff = await request(app.getHttpServer())
+      .post(`/api/v1/installment-plans/${purchase.installmentPlan.id}/prepay`)
+      .set(...authHeader(user.accessToken))
+      .send({ cashAccountId: account.id, amount: totalRemaining, paymentDate: '2026-10-12' })
+      .expect(201);
+    expect(payoff.body.settled).toBe(true);
+    expect(payoff.body.plan.status).toBe('PAID_OFF');
+
+    // El sync completa los intereses que faltaban: la tarjeta queda en cero.
+    await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}/statements`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    const cardAfter = await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(cardAfter.body.currentBalance).toBe(0);
+  });
+
+  it('cancelar una diferida revierte tambien los intereses facturados', async () => {
+    travelTo('2026-10-12');
+    const user = await createVerifiedUser(app, 'deferred-cancel');
+    const { card, purchase } = await createDeferredPlan(user);
+
+    await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}/statements`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+
+    await request(app.getHttpServer())
+      .post(`/api/v1/purchases/${purchase.id}/cancel`)
+      .set(...authHeader(user.accessToken))
+      .send({ reason: 'Devolucion completa' })
+      .expect(201);
+
+    const cardAfter = await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(cardAfter.body.currentBalance).toBe(0);
+  });
+
+  it('eliminar una diferida revierte intereses facturados y pagos aplicados', async () => {
+    travelTo('2026-10-12');
+    const user = await createVerifiedUser(app, 'deferred-remove');
+    const { card, account, purchase, first } = await createDeferredPlan(user);
+
+    await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}/statements`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+
+    await request(app.getHttpServer())
+      .post('/api/v1/card-payments')
+      .set(...authHeader(user.accessToken))
+      .send({
+        creditCardId: card.id,
+        cashAccountId: account.id,
+        amount: first.totalAmount,
+        paymentDate: '2026-10-12',
+      })
+      .expect(201);
+
+    const removed = await request(app.getHttpServer())
+      .delete(`/api/v1/purchases/${purchase.id}`)
+      .set(...authHeader(user.accessToken))
+      .send({ reason: 'Registrada por error' })
+      .expect(200);
+
+    // Reversa todo lo cargado por el plan (principal + intereses facturados)
+    // menos lo ya pagado.
+    expect(removed.body.refundedPrincipal).toBe(120000 - first.principal);
+
+    const cardAfter = await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(cardAfter.body.currentBalance).toBe(0);
   });
 });

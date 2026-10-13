@@ -16,6 +16,7 @@ import {
 import { addDays, compareLocalDates, daysBetween } from '../../domain/shared/local-date';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { CardLedgerService } from '../card-ledger/card-ledger.service';
 import { HolidayCalendarService } from '../holidays/holiday-calendar.service';
 import { InstallmentsService } from '../installments/installments.service';
 import { FinancialDatePolicy } from '../ledger/financial-date.policy';
@@ -51,6 +52,7 @@ export class StatementsService {
     private readonly datePolicy: FinancialDatePolicy,
     private readonly installmentsService: InstallmentsService,
     private readonly audit: AuditService,
+    private readonly cardLedger: CardLedgerService,
   ) {}
 
   /**
@@ -99,7 +101,17 @@ export class StatementsService {
         plan: { creditCardId: card.id },
         status: { not: 'CANCELLED' },
       },
-      select: { statementCutDate: true, totalAmount: true },
+      select: {
+        id: true,
+        number: true,
+        statementCutDate: true,
+        totalAmount: true,
+        interest: true,
+        iva: true,
+        fee: true,
+        statementId: true,
+        status: true,
+      },
     });
     const dueByCut = new Map<string, number>();
     for (const installment of installments) {
@@ -212,6 +224,10 @@ export class StatementsService {
 
           previousUnpaid = Math.max(amountToAvoidInterest - paid, 0);
         }
+
+        // RN-20: los intereses, IVA y comisiones de las mensualidades
+        // facturadas (o pagadas por adelantado) viven tambien en el libro.
+        await this.ensureBillingEntries(tx, userId, card.id, installments, today);
       },
       { timeout: 15_000 },
     );
@@ -239,6 +255,115 @@ export class StatementsService {
             ((entry.type === 'REFUND' || entry.type === 'ADJUSTMENT') && entry.amount < 0)),
       )
       .reduce((total, entry) => total + entry.amount, 0);
+  }
+
+  /**
+   * RN-20: las mensualidades facturadas (o pagadas por adelantado) cargan sus
+   * intereses, IVA y comisiones al libro, una sola vez por mensualidad
+   * (idempotente por `sourceId` + tipo). Cubre datos previos: cualquier
+   * mensualidad facturada o pagada con la app sin su entrada la recibe en el
+   * siguiente sync. El historial "al corriente" (pagado fuera de la app) no
+   * se carga.
+   */
+  private async ensureBillingEntries(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    cardId: string,
+    installments: Array<{
+      id: string;
+      number: number;
+      statementCutDate: string;
+      interest: number;
+      iva: number;
+      fee: number;
+      statementId: string | null;
+      status: string;
+    }>,
+    today: string,
+  ): Promise<void> {
+    const candidates = installments.filter(
+      (installment) => installment.interest > 0 || installment.iva > 0 || installment.fee > 0,
+    );
+    if (candidates.length === 0) {
+      return;
+    }
+
+    const ids = candidates.map((installment) => installment.id);
+    const [current, posted, allocated] = await Promise.all([
+      // El estado dentro de la transaccion: el corte pudo facturarlas ahora mismo.
+      tx.installment.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, statementId: true, status: true },
+      }),
+      tx.cardLedgerEntry.findMany({
+        where: {
+          userId,
+          creditCardId: cardId,
+          sourceType: 'InstallmentPlan',
+          sourceId: { in: ids },
+          type: { in: ['INTEREST', 'FEE'] },
+        },
+        select: { sourceId: true, type: true },
+      }),
+      tx.paymentAllocation.findMany({
+        where: { installmentId: { in: ids }, cardPayment: { status: 'APPLIED' } },
+        select: { installmentId: true },
+        distinct: ['installmentId'],
+      }),
+    ]);
+
+    const currentById = new Map(current.map((installment) => [installment.id, installment]));
+    const postedKeys = new Set(posted.map((entry) => `${entry.sourceId}|${entry.type}`));
+    const allocatedIds = new Set(allocated.map((allocation) => allocation.installmentId));
+
+    for (const installment of candidates) {
+      const state = currentById.get(installment.id) ?? {
+        statementId: installment.statementId,
+        status: installment.status,
+      };
+      const eligible =
+        state.statementId !== null ||
+        (state.status === 'PAID' && allocatedIds.has(installment.id));
+      if (!eligible) {
+        continue;
+      }
+
+      const occurredOn = state.statementId ? installment.statementCutDate : today;
+      const entries = [
+        {
+          type: 'INTEREST',
+          amount: installment.interest,
+          description: `Interes mensualidad ${installment.number}`,
+        },
+        {
+          type: 'FEE',
+          amount: installment.iva + installment.fee,
+          description: `IVA y comisiones mensualidad ${installment.number}`,
+        },
+      ];
+
+      for (const entry of entries) {
+        if (entry.amount <= 0 || postedKeys.has(`${installment.id}|${entry.type}`)) {
+          continue;
+        }
+        await this.cardLedger.postEntry(
+          {
+            userId,
+            creditCardId: cardId,
+            type: entry.type,
+            amount: entry.amount,
+            occurredOn,
+            description: entry.description,
+            sourceType: 'InstallmentPlan',
+            sourceId: installment.id,
+            createdById: userId,
+            // Un corte ya facturado puede quedar fuera del limite de captura.
+            allowBackdated: true,
+          },
+          tx,
+        );
+      }
+    }
   }
 
   /**

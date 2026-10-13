@@ -20,6 +20,7 @@ import {
   outstandingPrincipalOf,
 } from '../../domain/installments/amortization';
 import { addDays, compareLocalDates } from '../../domain/shared/local-date';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { CardLedgerService } from '../card-ledger/card-ledger.service';
@@ -435,12 +436,25 @@ export class PurchasesService {
     const today = await this.datePolicy.today(userId);
 
     await this.prisma.$transaction(async (tx) => {
+      // Se revierte todo lo cargado por el plan en el libro: el principal (o
+      // el pendiente, en planes "al corriente") mas los intereses e IVA ya
+      // facturados por sus mensualidades.
+      const charge = await tx.cardLedgerEntry.findFirst({
+        where: { userId, type: 'PURCHASE', sourceId: purchase.id },
+        select: { amount: true },
+      });
+      const interestCharges = await this.planInterestCharges(
+        tx,
+        userId,
+        purchase.installmentPlan?.id,
+      );
+
       await this.cardLedger.postEntry(
         {
           userId,
           creditCardId: purchase.creditCardId,
           type: 'REFUND',
-          amount: -purchase.amount,
+          amount: -((charge?.amount ?? purchase.amount) + interestCharges),
           occurredOn: today,
           description: `Cancelacion: ${purchase.description}`,
           sourceType: 'PurchaseCancellation',
@@ -530,7 +544,16 @@ export class PurchasesService {
           _sum: { amount: true },
         });
 
-        const chargedAmount = charge?.amount ?? outstandingPrincipalOf(plan.installments);
+        // Se reversa todo lo cargado por el plan: principal (o pendiente) mas
+        // los intereses/IVA ya facturados en el libro.
+        const interestCharges = await this.planInterestCharges(
+          tx,
+          userId,
+          plan.id,
+          plan.installments,
+        );
+        const chargedAmount =
+          (charge?.amount ?? outstandingPrincipalOf(plan.installments)) + interestCharges;
         paidAmount = paid._sum.amount ?? 0;
         // Si el plan ya se habia cancelado (con su reverso), no se repite.
         refundedPrincipal =
@@ -660,11 +683,9 @@ export class PurchasesService {
         reason: 'PREPAYMENT_EXCEEDS_PLAN',
       });
     }
-    if (dto.amount > card.currentBalance) {
-      throw new UnprocessableEntityError('El pago excede el saldo actual de la tarjeta.', {
-        reason: 'PAYMENT_EXCEEDS_BALANCE',
-      });
-    }
+    // RN-20/RN-21: el anticipo topa con el pendiente del plan (que incluye los
+    // intereses aun no facturados del libro), no con el saldo actual de la
+    // tarjeta: liquidar un plan con interes futuro debe poder.
 
     const settled = dto.amount >= totalRemaining;
     const today = await this.datePolicy.today(userId);
@@ -788,6 +809,39 @@ export class PurchasesService {
       allocations: result.allocations,
       settled,
     };
+  }
+
+  /** Intereses, IVA y comisiones ya cargados al libro por un plan (RN-20). */
+  private async planInterestCharges(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    planId: string | undefined,
+    installments?: Array<{ id: string }>,
+  ): Promise<number> {
+    const installmentIds =
+      installments?.map((installment) => installment.id) ??
+      (planId
+        ? (
+            await tx.installment.findMany({
+              where: { planId },
+              select: { id: true },
+            })
+          ).map((installment) => installment.id)
+        : []);
+    if (installmentIds.length === 0) {
+      return 0;
+    }
+
+    const result = await tx.cardLedgerEntry.aggregate({
+      where: {
+        userId,
+        sourceType: 'InstallmentPlan',
+        sourceId: { in: installmentIds },
+        type: { in: ['INTEREST', 'FEE'] },
+      },
+      _sum: { amount: true },
+    });
+    return result._sum.amount ?? 0;
   }
 }
 
