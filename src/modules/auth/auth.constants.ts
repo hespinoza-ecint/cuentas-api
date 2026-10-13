@@ -19,3 +19,23 @@ export const AUTH_THROTTLE = {
     ttl: Number(process.env.AUTH_THROTTLE_TTL_MS ?? 60000),
   },
 } as const;
+
+/**
+ * Gracia tras rotar un refresh token: un reintento inmediato con el token
+ * viejo (dos peticiones o dos pestanas a la vez) es una carrera benigna y no
+ * debe revocar la familia; fuera de la gracia se trata como robo.
+ */
+export const REFRESH_ROTATION_GRACE_MS = Number(
+  process.env.REFRESH_ROTATION_GRACE_MS ?? 30_000,
+);
+
+/**
+ * Limite propio del refresh: la app renueva al abrir y tras cada 401, asi que
+ * necesita mas margen que login/registro.
+ */
+export const REFRESH_THROTTLE = {
+  default: {
+    limit: Number(process.env.REFRESH_THROTTLE_LIMIT ?? 60),
+    ttl: Number(process.env.REFRESH_THROTTLE_TTL_MS ?? 60000),
+  },
+} as const;

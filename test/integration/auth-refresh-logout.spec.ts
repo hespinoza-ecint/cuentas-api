@@ -1,5 +1,6 @@
 import { NestFastifyApplication } from '@nestjs/platform-fastify';
 import request from 'supertest';
+import { PrismaService } from '../../src/infrastructure/prisma/prisma.service';
 import {
   authHeader,
   createVerifiedUser,
@@ -24,7 +25,7 @@ describe('Refresh, logout y sesiones (integracion)', () => {
     }
   });
 
-  it('rota el refresh token y detecta la reutilizacion revocando la familia', async () => {
+  it('rota el refresh token y una carrera benigna no revoca la familia', async () => {
     const user = await createVerifiedUser(app, 'rotate');
 
     const rotated = await request(app.getHttpServer())
@@ -36,13 +37,44 @@ describe('Refresh, logout y sesiones (integracion)', () => {
     expect(newRefreshToken).toEqual(expect.any(String));
     expect(newRefreshToken).not.toBe(user.refreshToken);
 
-    // Reutilizar el token viejo revoca toda la familia.
+    // Reintento inmediato con el token viejo (dos peticiones o dos pestanas a
+    // la vez): es una carrera benigna, no robo: 401 sin revocar la familia.
+    const race = await request(app.getHttpServer())
+      .post('/api/v1/auth/refresh')
+      .send({ refreshToken: user.refreshToken })
+      .expect(401);
+    expect(race.body.reason).toBe('REFRESH_TOKEN_ROTATED');
+
+    // El token vigente sigue funcionando (la familia vive).
+    await request(app.getHttpServer())
+      .post('/api/v1/auth/refresh')
+      .send({ refreshToken: newRefreshToken })
+      .expect(200);
+  });
+
+  it('la reutilizacion tardia de un token rotado si revoca la familia', async () => {
+    const user = await createVerifiedUser(app, 'reuse-late');
+
+    const rotated = await request(app.getHttpServer())
+      .post('/api/v1/auth/refresh')
+      .send({ refreshToken: user.refreshToken })
+      .expect(200);
+    const newRefreshToken = rotated.body.refreshToken as string;
+
+    // Envejece la rotacion mas alla de la gracia (escenario de robo real).
+    const prisma = app.get(PrismaService);
+    await prisma.session.updateMany({
+      where: { userId: user.userId, revokedReason: 'ROTATED' },
+      data: { revokedAt: new Date(Date.now() - 120_000) },
+    });
+
     const reuse = await request(app.getHttpServer())
       .post('/api/v1/auth/refresh')
       .send({ refreshToken: user.refreshToken })
       .expect(401);
     expect(reuse.body.reason).toBe('REFRESH_TOKEN_REUSED');
 
+    // La familia quedo revocada: el token vigente ya no sirve.
     await request(app.getHttpServer())
       .post('/api/v1/auth/refresh')
       .send({ refreshToken: newRefreshToken })
@@ -90,6 +122,39 @@ describe('Refresh, logout y sesiones (integracion)', () => {
       .post('/api/v1/auth/refresh')
       .send({ refreshToken: user.refreshToken })
       .expect(401);
+  });
+
+  it('logout con la cookie de refresh (sin access token) revoca la sesion', async () => {
+    const email = uniqueEmail('logout-cookie');
+    await registerUser(app, email);
+    await verifyUserEmail(app, email);
+
+    const login = await request(app.getHttpServer())
+      .post('/api/v1/auth/login')
+      .send({ email, password: TEST_PASSWORD, clientType: 'WEB' })
+      .expect(200);
+
+    const rawCookie = (login.headers['set-cookie'] as unknown as string[])[0];
+    const cookieValue = rawCookie.split(';')[0];
+
+    // Sin Authorization (access token vencido): la cookie basta para revocar.
+    await request(app.getHttpServer())
+      .post('/api/v1/auth/logout')
+      .set('Cookie', cookieValue)
+      .expect(204);
+
+    // El refresh viejo queda revocado (401 claro, no reuso).
+    const after = await request(app.getHttpServer())
+      .post('/api/v1/auth/refresh')
+      .set('Cookie', cookieValue)
+      .set('Origin', 'http://localhost:5173')
+      .send({})
+      .expect(401);
+    expect(after.body.reason).toBe('INVALID_REFRESH_TOKEN');
+  });
+
+  it('logout sin credenciales responde 204 (idempotente)', async () => {
+    await request(app.getHttpServer()).post('/api/v1/auth/logout').expect(204);
   });
 
   it('logout-all revoca todas las sesiones del usuario', async () => {

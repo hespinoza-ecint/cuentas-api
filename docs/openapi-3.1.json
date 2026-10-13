@@ -98,6 +98,16 @@
       "post": {
         "operationId": "AuthController_logout",
         "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LogoutDto"
+              }
+            }
+          }
+        },
         "responses": {
           "204": {
             "description": ""
@@ -3566,6 +3576,15 @@
         ]
       },
       "RefreshDto": {
+        "type": "object",
+        "properties": {
+          "refreshToken": {
+            "type": "string",
+            "maxLength": 512
+          }
+        }
+      },
+      "LogoutDto": {
         "type": "object",
         "properties": {
           "refreshToken": {

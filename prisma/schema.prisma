@@ -154,6 +154,7 @@ model IdempotencyRecord {
   method         String
   path           String
   requestHash    String
+  status         String   @default("COMPLETED") // IN_PROGRESS | COMPLETED
   responseStatus Int
   responseBody   String // JSON
   createdAt      DateTime @default(now())

@@ -100,6 +100,7 @@ CREATE TABLE `IdempotencyRecord` (
     `method` VARCHAR(191) NOT NULL,
     `path` VARCHAR(191) NOT NULL,
     `requestHash` VARCHAR(191) NOT NULL,
+    `status` VARCHAR(191) NOT NULL DEFAULT 'COMPLETED',
     `responseStatus` INTEGER NOT NULL,
     `responseBody` TEXT NOT NULL,
     `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),

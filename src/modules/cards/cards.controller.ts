@@ -15,6 +15,7 @@ import type { FastifyRequest } from 'fastify';
 import { AuthenticatedUser } from '../../common/auth/authenticated-user';
 import { CurrentUser } from '../../common/auth/current-user.decorator';
 import { RequireVerifiedEmail } from '../../common/auth/require-verified-email.decorator';
+import { Idempotent } from '../../common/idempotency/idempotent.decorator';
 import { requestMeta } from '../../common/http/request-meta';
 import { CardsService } from './cards.service';
 import {
@@ -94,6 +95,7 @@ export class CardsController {
   }
 
   @Post(':id/reconcile')
+  @Idempotent()
   @RequireVerifiedEmail()
   reconcile(
     @CurrentUser() user: AuthenticatedUser,

@@ -15,6 +15,7 @@ import type { FastifyRequest } from 'fastify';
 import { AuthenticatedUser } from '../../common/auth/authenticated-user';
 import { CurrentUser } from '../../common/auth/current-user.decorator';
 import { RequireVerifiedEmail } from '../../common/auth/require-verified-email.decorator';
+import { Idempotent } from '../../common/idempotency/idempotent.decorator';
 import { requestMeta } from '../../common/http/request-meta';
 import { CashAccountsService } from './cash-accounts.service';
 import {
@@ -46,6 +47,7 @@ export class CashAccountsController {
   }
 
   @Post('transfer')
+  @Idempotent()
   @RequireVerifiedEmail()
   transfer(
     @CurrentUser() user: AuthenticatedUser,

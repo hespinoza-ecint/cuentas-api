@@ -22,10 +22,16 @@ import { clearCookie, parseCookie, serializeCookie } from '../../common/http/coo
 import { requestMeta } from '../../common/http/request-meta';
 import { AppConfigService } from '../../config/app-config.service';
 import { AuthService, AuthSessionResult } from './auth.service';
-import { AUTH_THROTTLE, REFRESH_COOKIE_NAME, REFRESH_COOKIE_PATH } from './auth.constants';
+import {
+  AUTH_THROTTLE,
+  REFRESH_COOKIE_NAME,
+  REFRESH_COOKIE_PATH,
+  REFRESH_THROTTLE,
+} from './auth.constants';
 import { AuthResponseDto, RegisterResponseDto } from './dto/auth-response.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { LoginDto } from './dto/login.dto';
+import { LogoutDto } from './dto/logout.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { RegisterDto } from './dto/register.dto';
 import { ResendVerificationDto } from './dto/resend-verification.dto';
@@ -71,7 +77,7 @@ export class AuthController {
   }
 
   @Public()
-  @Throttle(AUTH_THROTTLE)
+  @Throttle(REFRESH_THROTTLE)
   @Post('refresh')
   @HttpCode(200)
   async refresh(
@@ -102,15 +108,36 @@ export class AuthController {
     return this.toAuthResponse(result);
   }
 
+  /**
+   * Logout idempotente: no exige un access token vigente. Revoca la sesion
+   * del refresh token (cookie del WEB o cuerpo) o, si no lo hay, la del access
+   * token actual, y siempre limpia la cookie.
+   */
+  @Public()
+  @Throttle(REFRESH_THROTTLE)
   @Post('logout')
   @HttpCode(204)
   @AllowPendingDeletion()
   async logout(
-    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: LogoutDto,
     @Req() request: FastifyRequest,
     @Res({ passthrough: true }) reply: FastifyReply,
   ): Promise<void> {
-    await this.auth.logout(user.id, user.sessionId, requestMeta(request));
+    const cookieToken = parseCookie(request.headers.cookie, REFRESH_COOKIE_NAME);
+    const fromCookie =
+      typeof cookieToken === 'string' && cookieToken.length > 0 ? cookieToken : undefined;
+    const fromBody =
+      typeof dto?.refreshToken === 'string' && dto.refreshToken.length > 0
+        ? dto.refreshToken
+        : undefined;
+
+    await this.auth.logout(
+      {
+        refreshToken: fromCookie ?? fromBody,
+        accessToken: this.extractBearerToken(request),
+      },
+      requestMeta(request),
+    );
     this.clearRefreshCookie(reply);
   }
 
@@ -224,5 +251,14 @@ export class AuthController {
         reason: 'UNTRUSTED_ORIGIN',
       });
     }
+  }
+
+  private extractBearerToken(request: FastifyRequest): string | undefined {
+    const header = request.headers.authorization;
+    if (typeof header !== 'string') {
+      return undefined;
+    }
+    const [scheme, token] = header.split(' ');
+    return scheme?.toLowerCase() === 'bearer' && token ? token : undefined;
   }
 }

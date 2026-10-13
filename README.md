@@ -234,6 +234,7 @@ cuentas-api/
 - [Fase 22 — Edición de ingresos con categoría y zona horaria validada](docs/fase-22-ingresos-y-zona-horaria.md)
 - [Fase 23 — Modelo de cortes: pago para no generar intereses y anticipos (RN-17/RN-23)](docs/fase-23-modelo-de-cortes.md)
 - [Fase 24 — Línea de tiempo única: horizonte, recurrentes con tarjeta y anualidad](docs/fase-24-linea-de-tiempo.md)
+- [Fase 25 — Sesión y refresh robustos + idempotencia con reserva](docs/fase-25-sesion-e-idempotencia.md)
 
 ## Documentación técnica completa
 

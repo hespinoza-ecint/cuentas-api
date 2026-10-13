@@ -17,6 +17,7 @@ import { toUserResponse, UserResponseDto } from '../users/dto/user-response.dto'
 import { UsersRepository } from '../users/repositories/users.repository';
 import {
   ClientType,
+  REFRESH_ROTATION_GRACE_MS,
   TOKEN_TYPE_EMAIL_VERIFY,
   TOKEN_TYPE_PASSWORD_RESET,
 } from './auth.constants';
@@ -185,19 +186,7 @@ export class AuthService {
     }
 
     if (session.revokedAt) {
-      await this.sessions.revokeFamily(session.familyId, 'REUSE_DETECTED');
-      await this.audit.record({
-        action: 'auth.refresh.reuse_detected',
-        entityType: 'Session',
-        entityId: session.id,
-        userId: session.userId,
-        actorUserId: session.userId,
-        ...meta,
-      });
-      throw new UnauthorizedError(
-        'La sesion fue revocada por seguridad. Inicia sesion de nuevo.',
-        { reason: 'REFRESH_TOKEN_REUSED' },
-      );
+      await this.failRevokedSession(session, meta);
     }
 
     if (session.expiresAt.getTime() <= Date.now()) {
@@ -226,6 +215,13 @@ export class AuthService {
       expiresAt,
     });
 
+    if (!newSession) {
+      // Otra peticion gano la rotacion en paralelo: carrera benigna.
+      throw new UnauthorizedError('La sesion ya fue renovada. Reintenta con el token vigente.', {
+        reason: 'REFRESH_TOKEN_ROTATED',
+      });
+    }
+
     return {
       accessToken: await this.signAccessToken(user.id, newSession.id, user.role),
       expiresInSeconds: this.config.jwtAccessTtlMinutes * 60,
@@ -236,7 +232,80 @@ export class AuthService {
     };
   }
 
-  async logout(userId: string, sessionId: string, meta: RequestMeta): Promise<void> {
+  /**
+   * Politica de reuso de un refresh token ya revocado: dentro de la gracia es
+   * una carrera benigna (dos pestanas) y solo responde 401; fuera de ella se
+   * trata como robo y se revoca la familia completa.
+   */
+  private async failRevokedSession(session: SessionWithUser, meta: RequestMeta): Promise<never> {
+    const rotatedWithinGrace =
+      session.revokedReason === 'ROTATED' &&
+      session.revokedAt !== null &&
+      Date.now() - session.revokedAt.getTime() <= REFRESH_ROTATION_GRACE_MS;
+
+    if (rotatedWithinGrace) {
+      throw new UnauthorizedError('La sesion ya fue renovada. Reintenta con el token vigente.', {
+        reason: 'REFRESH_TOKEN_ROTATED',
+      });
+    }
+
+    if (session.revokedReason === 'ROTATED') {
+      await this.sessions.revokeFamily(session.familyId, 'REUSE_DETECTED');
+      await this.audit.record({
+        action: 'auth.refresh.reuse_detected',
+        entityType: 'Session',
+        entityId: session.id,
+        userId: session.userId,
+        actorUserId: session.userId,
+        ...meta,
+      });
+      throw new UnauthorizedError('La sesion fue revocada por seguridad. Inicia sesion de nuevo.', {
+        reason: 'REFRESH_TOKEN_REUSED',
+      });
+    }
+
+    throw new UnauthorizedError('La sesion no existe o ya fue revocada.', {
+      reason: 'INVALID_REFRESH_TOKEN',
+    });
+  }
+
+  async logout(
+    credentials: { refreshToken?: string; accessToken?: string },
+    meta: RequestMeta,
+  ): Promise<void> {
+    if (credentials.refreshToken) {
+      const session = await this.sessions.findByTokenHash(
+        this.tokenService.hash(credentials.refreshToken),
+      );
+      if (session && !session.revokedAt) {
+        await this.revokeLoggedOut(session.id, session.userId, meta);
+      }
+      return;
+    }
+
+    if (!credentials.accessToken) {
+      // Idempotente: sin credenciales no hay nada que revocar.
+      return;
+    }
+
+    try {
+      const payload = await this.jwt.verifyAsync<{ sid: string; sub: string }>(
+        credentials.accessToken,
+      );
+      const session = await this.sessions.findActiveByIdForUser(payload.sid, payload.sub);
+      if (session) {
+        await this.revokeLoggedOut(session.id, session.userId, meta);
+      }
+    } catch {
+      // Access token invalido o vencido: no hay nada que revocar por esta via.
+    }
+  }
+
+  private async revokeLoggedOut(
+    sessionId: string,
+    userId: string,
+    meta: RequestMeta,
+  ): Promise<void> {
     await this.sessions.revoke(sessionId, 'LOGOUT');
     await this.audit.record({
       action: 'auth.logout',

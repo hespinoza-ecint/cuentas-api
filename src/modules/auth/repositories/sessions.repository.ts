@@ -96,18 +96,28 @@ export class SessionsRepository {
     return result.count;
   }
 
-  /** Rotacion atomica: crea la sesion nueva y revoca la anterior. */
-  rotate(oldSessionId: string, data: Prisma.SessionUncheckedCreateInput): Promise<Session> {
+  /**
+   * Rotacion atomica: revoca la sesion anterior solo si seguia vigente y crea
+   * la nueva. Si otra peticion gano la carrera devuelve null (no se crea nada).
+   */
+  rotate(oldSessionId: string, data: Prisma.SessionUncheckedCreateInput): Promise<Session | null> {
     return this.prisma.$transaction(async (tx) => {
-      const created = await tx.session.create({ data });
-      await tx.session.update({
-        where: { id: oldSessionId },
+      const revoked = await tx.session.updateMany({
+        where: { id: oldSessionId, revokedAt: null },
         data: {
           revokedAt: new Date(),
           revokedReason: 'ROTATED',
-          replacedBySessionId: created.id,
           lastUsedAt: new Date(),
         },
+      });
+      if (revoked.count === 0) {
+        return null;
+      }
+
+      const created = await tx.session.create({ data });
+      await tx.session.update({
+        where: { id: oldSessionId },
+        data: { replacedBySessionId: created.id },
       });
       return created;
     });

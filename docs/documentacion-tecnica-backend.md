@@ -115,7 +115,7 @@ Arquitectura **en capas con dominio puro** (estilo hexagonal pragmático) sobre 
 | Ledger + caché de saldo | Libros solo-inserción + saldo cacheado con control de versión |
 | Reverso (compensación) | Los errores no se editan: se crea un movimiento inverso con `reverses*Id` único |
 | Snapshot | `RecommendationHistory` guarda solicitud, contexto, reglas y resultado |
-| Idempotencia | Interceptor + tabla `IdempotencyRecord` (cabecera opcional `Idempotency-Key`) |
+| Idempotencia | Interceptor + tabla `IdempotencyRecord` (cabecera opcional `Idempotency-Key`; reserva `IN_PROGRESS` y replay de la respuesta) |
 | Circuito de formato de error | Filtro global → RFC 9457 (`application/problem+json`) |
 | Inyección de dependencias | NestJS DI en todo el proyecto |
 | Reloj inyectable | `ClockService` (zonas horarias) para pruebas deterministas |
@@ -224,6 +224,8 @@ sequenceDiagram
 | `EMAIL_VERIFICATION_TTL_HOURS` | `24` | Tokens de verificación |
 | `PASSWORD_RESET_TTL_MINUTES` | `30` | Tokens de reset |
 | `AUTH_THROTTLE_TTL_MS` / `AUTH_THROTTLE_LIMIT` | `60000` / `5` | Límite en `/auth/*` |
+| `REFRESH_THROTTLE_TTL_MS` / `REFRESH_THROTTLE_LIMIT` | `60000` / `60` | Límite propio de `POST /auth/refresh` y `POST /auth/logout` |
+| `REFRESH_ROTATION_GRACE_MS` | `30000` | Gracia para tratar un refresh rotado reutilizado como carrera benigna |
 | `WEB_APP_URL` | `http://localhost:5173` | Enlaces de correo |
 | `TEST_MYSQL_URL` | — | Solo pruebas: corre la suite contra MySQL |
 | `BACKUP_DIR` / `BACKUP_RETENTION` | carpeta de la BD / 14 | Respaldo SQLite |
@@ -1276,7 +1278,9 @@ Los días que no existen en un mes se ajustan al último día. Las fechas se aju
 | Bloqueo tras 5 intentos fallidos (15 min) | `failedLoginCount` + `lockedUntil` | `ACCOUNT_LOCKED` (423) |
 | Cambiar contraseña cierra las demás sesiones | `revokeAllForUser(except current)` | — |
 | Reset de contraseña cierra todas las sesiones | `PASSWORD_RESET` | — |
-| Reutilizar refresh revoca toda la familia | `REUSE_DETECTED` | `REFRESH_TOKEN_REUSED` |
+| Reuso de refresh dentro de la gracia (carrera de pestañas o reintento) | 401 sin revocar la familia | `REFRESH_TOKEN_ROTATED` |
+| Reuso tardío de un refresh rotado | Revoca la familia completa | `REFRESH_TOKEN_REUSED` |
+| Logout sin access token vigente | Revoca por la cookie/refresh y limpia siempre la cookie (idempotente) | — |
 | Cuenta en eliminación solo puede cancelar/exportar/logout | `PendingDeletionGuard` lógico | `PENDING_DELETION` (403) |
 | Purga definitiva a los 30 días | Cron diario 03:00 + endpoint admin | — |
 | Mensualidad duplicada | Único `(planId, number)` / `(recurringExpenseId, occurrenceDate)` | `OCCURRENCE_ALREADY_*` |
@@ -1285,7 +1289,7 @@ Los días que no existen en un mes se ajustan al último día. Las fechas se aju
 | Cambio de día de corte bloqueado con historial | Cortes emitidos o mensualidades existentes → 422 | `CUT_DAY_LOCKED` |
 | Anticipo no puede exceder el plan | 422 | `PREPAYMENT_EXCEEDS_PLAN`, `PLAN_PAID_OFF` |
 | Reglas eliminatorias sin peso (admin) | 400 | `ELIMINATORY_RULE_WITH_WEIGHT` |
-| Idempotencia opcional | Replay o 409 si cambia el cuerpo | `IDEMPOTENCY_KEY_INVALID`, `IDEMPOTENCY_KEY_CONFLICT` |
+| Idempotencia opcional | Con reserva `IN_PROGRESS` previa: el reintento concurrente recibe 409; replay si coinciden llave y cuerpo; registro vencido se re-ejecuta | `IDEMPOTENCY_KEY_INVALID`, `IDEMPOTENCY_KEY_CONFLICT`, `IDEMPOTENCY_IN_PROGRESS` |
 | Aislamiento por usuario | Recursos ajenos → 404 (nunca 403) | `NOT_FOUND` |
 | Mutaciones financieras exigen correo verificado | Guard global | `EMAIL_NOT_VERIFIED` (403) |
 
@@ -1350,7 +1354,7 @@ Los días que no existen en un mes se ajustan al último día. Las fechas se aju
 
 1. Cada login/registro de sesión crea una `Session` con `familyId` nuevo.
 2. Cada refresh **rota**: crea sesión nueva (mismo `familyId`) y revoca la anterior (`revokedReason=ROTATED`, `replacedBySessionId`).
-3. Si se presenta un token de una sesión ya revocada → **se revoca toda la familia** (`REUSE_DETECTED`) y responde 401 `REFRESH_TOKEN_REUSED`.
+3. Si se presenta un token de una sesión rotada hace **menos de `REFRESH_ROTATION_GRACE_MS`** (dos pestañas o un reintento), responde 401 `REFRESH_TOKEN_ROTATED` **sin** revocar la familia; fuera de la gracia, o ante una sesión revocada por otro motivo, se trata como robo: familia completa (`REUSE_DETECTED`) y 401 `REFRESH_TOKEN_REUSED`.
 4. El access token anterior deja de servir tras la rotación (su sesión ya no está activa).
 
 ## 8.3 Roles y permisos
@@ -1414,7 +1418,7 @@ sequenceDiagram
     end
     API->>API: hash(token) → busca Session
     alt sesión revocada (posible robo)
-        API->>API: revoca familia completa (REUSE_DETECTED)
+        API->>API: revoca la familia si el reuso rebasa la gracia (REUSE_DETECTED)
         API-->>C: 401 REFRESH_TOKEN_REUSED
     else sesión válida
         API->>API: crea sesión nueva (mismo familyId), revoca la anterior
@@ -1429,7 +1433,7 @@ sequenceDiagram
     autonumber
     participant C as Cliente
     participant API as Cuentas API
-    C->>API: POST /auth/logout (Bearer)
+    C->>API: POST /auth/logout (cookie o Bearer)
     API->>API: revoca Session actual (LOGOUT) + limpia cookie
     API-->>C: 204 (el access token deja de servir de inmediato)
     Note over C,API: POST /auth/logout-all revoca todas las sesiones (LOGOUT_ALL)
@@ -1498,7 +1502,7 @@ Errores: `503 SERVICE_UNAVAILABLE` con `checks.database.status = "down"`.
 | POST | `/auth/register` | Pública | 5/min |
 | POST | `/auth/login` | Pública | 5/min |
 | POST | `/auth/refresh` | Pública | 5/min |
-| POST | `/auth/logout` | Bearer | — |
+| POST | `/auth/logout` | Cookie de refresh o Bearer (opcional) | — |
 | POST | `/auth/logout-all` | Bearer | — |
 | GET | `/auth/sessions` | Bearer | — |
 | DELETE | `/auth/sessions/:id` | Bearer | — |
@@ -1535,7 +1539,7 @@ Errores: `401 INVALID_CREDENTIALS`, `423 ACCOUNT_LOCKED` (`detail` con minutos r
 Respuesta igual a login (WEB rota la cookie; NATIVE devuelve `refreshToken`).
 Errores: `401 INVALID_REFRESH_TOKEN`, `401 REFRESH_TOKEN_REUSED` (familia revocada), `401 REFRESH_TOKEN_EXPIRED`, `403 UNTRUSTED_ORIGIN` (cookie sin `Origin` permitido), `401 MISSING_REFRESH_TOKEN`.
 
-**POST /auth/logout → 204** · Sin cuerpo. Revoca la sesión actual y limpia la cookie.
+**POST /auth/logout → 204** · Idempotente y sin exigir access token vigente: revoca la sesión del refresh token (cookie del WEB o `refreshToken` del cuerpo) o, si no lo hay, la del Bearer actual, y limpia siempre la cookie.
 **POST /auth/logout-all → 204** · Revoca todas las sesiones (`{ "revokedSessions": 2 }` internamente auditado).
 
 **GET /auth/sessions → 200**
@@ -2256,6 +2260,16 @@ Tipos de evento: `INCOME`, `RECURRING_EXPENSE`, `CARD_STATEMENT`, `INSTALLMENT`,
       "post": {
         "operationId": "AuthController_logout",
         "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LogoutDto"
+              }
+            }
+          }
+        },
         "responses": {
           "204": {
             "description": ""
@@ -5732,6 +5746,15 @@ Tipos de evento: `INCOME`, `RECURRING_EXPENSE`, `CARD_STATEMENT`, `INSTALLMENT`,
           }
         }
       },
+      "LogoutDto": {
+        "type": "object",
+        "properties": {
+          "refreshToken": {
+            "type": "string",
+            "maxLength": 512
+          }
+        }
+      },
       "SessionResponseDto": {
         "type": "object",
         "properties": {
@@ -7398,7 +7421,7 @@ Widgets mínimos:
 
 - Skeletons en tablas y tarjetas del dashboard.
 - Botones `LoadingButton` (deshabilitados + spinner) en toda mutación.
-- **Idempotencia en cliente:** generar un UUID por formulario, enviarlo en `Idempotency-Key` y conservarlo en reintentos; si el backend responde `x-idempotent-replay`, continuar como éxito sin duplicar.
+- **Idempotencia en cliente:** generar una llave por intento de envío (se conserva en reintentos y se regenera tras el éxito), enviarla en `Idempotency-Key` y conservarla en reintentos; si el backend responde `x-idempotent-replay`, continuar como éxito sin duplicar. `newIdempotencyKey()` (web) usa `crypto.randomUUID` y cae a `getRandomValues`/`Math.random` cuando no existe (por ejemplo con `http://IP`).
 - Optimistic UI solo en listas no financieras; los saldos se refrescan tras confirmar.
 - Spinner global con bloqueo durante `POST /recommendations` (puede tardar: consulta y simula).
 
