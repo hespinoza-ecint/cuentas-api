@@ -132,12 +132,15 @@ export class CardLedgerService {
         creditCardId: original.creditCardId,
         type: 'REVERSAL',
         amount: -original.amount,
-        occurredOn: await this.datePolicy.today(userId),
+        // La compensacion vive en el periodo original del movimiento: los
+        // cortes ya cerrados se recalculan con su credito.
+        occurredOn: original.occurredOn,
         description: `Reverso de: ${original.description}`,
         sourceType: 'Reversal',
         sourceId: original.id,
         reversesEntryId: original.id,
         createdById,
+        allowBackdated: true,
       },
       tx,
     );

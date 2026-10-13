@@ -1,6 +1,7 @@
 import { NestFastifyApplication } from '@nestjs/platform-fastify';
 import request from 'supertest';
 import { addDays, todayInTimeZone } from '../../src/domain/shared/local-date';
+import { ClockService } from '../../src/infrastructure/clock/clock.module';
 import {
   authHeader,
   createCard,
@@ -11,10 +12,23 @@ import { createTestApp } from '../helpers/test-app';
 
 describe('Pagos de tarjeta (integracion)', () => {
   let app: NestFastifyApplication;
+  let clock: ClockService;
+  let realNow: () => Date;
 
   beforeAll(async () => {
     app = await createTestApp();
+    clock = app.get(ClockService);
+    realNow = clock.now.bind(clock);
   });
+
+  afterEach(() => {
+    clock.now = realNow;
+  });
+
+  /** Simula la fecha actual (18:00Z = 12:00 en America/Mexico_City). */
+  function travelTo(date: string): void {
+    clock.now = () => new Date(`${date}T18:00:00Z`);
+  }
 
   afterAll(async () => {
     if (app) {
@@ -191,5 +205,50 @@ describe('Pagos de tarjeta (integracion)', () => {
         paymentDate: today,
       })
       .expect(404);
+  });
+
+  it('fecha el reverso de un pago en el dia del pago (periodo original)', async () => {
+    travelTo('2026-10-05');
+    const user = await createVerifiedUser(app, 'payment-reverse-date');
+    const account = await createCashAccount(app, user.accessToken, { openingBalance: 1000000 });
+    const card = await createCard(app, user.accessToken, {
+      cutDay: 15,
+      dueDaysAfterCut: 20,
+      openingBalance: 300000,
+      openingDate: '2026-09-10',
+    });
+
+    await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}/statements`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+
+    const payment = await request(app.getHttpServer())
+      .post('/api/v1/card-payments')
+      .set(...authHeader(user.accessToken))
+      .send({
+        creditCardId: card.id,
+        cashAccountId: account.id,
+        amount: 100000,
+        paymentDate: '2026-09-25',
+      })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post(`/api/v1/card-payments/${payment.body.payment.id}/reverse`)
+      .set(...authHeader(user.accessToken))
+      .send({ reason: 'Pago duplicado' })
+      .expect(201);
+
+    const ledger = await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}/ledger?limit=100`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+
+    const reversal = (ledger.body.data as Array<{ type: string; occurredOn: string }>).find(
+      (entry) => entry.type === 'REVERSAL',
+    );
+    // La compensacion vive en el periodo original del pago, no en el dia del reverso.
+    expect(reversal?.occurredOn).toBe('2026-09-25');
   });
 });

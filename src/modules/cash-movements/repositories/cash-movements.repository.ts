@@ -36,7 +36,14 @@ export class CashMovementsRepository {
               },
             }
           : {}),
-        ...(cursorMovement ? { createdAt: { lt: cursorMovement.createdAt } } : {}),
+        ...(cursorMovement
+          ? {
+              OR: [
+                { createdAt: { lt: cursorMovement.createdAt } },
+                { createdAt: cursorMovement.createdAt, id: { lt: cursorMovement.id } },
+              ],
+            }
+          : {}),
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,

@@ -178,7 +178,17 @@ export class RecommendationsService {
       : null;
 
     const items = await this.prisma.recommendationHistory.findMany({
-      where: { userId, ...(cursor ? { createdAt: { lt: cursor.createdAt } } : {}) },
+      where: {
+        userId,
+        ...(cursor
+          ? {
+              OR: [
+                { createdAt: { lt: cursor.createdAt } },
+                { createdAt: cursor.createdAt, id: { lt: cursor.id } },
+              ],
+            }
+          : {}),
+      },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
       include: { recommendedCard: { select: { id: true, alias: true, last4: true } } },

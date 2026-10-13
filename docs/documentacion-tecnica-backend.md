@@ -224,6 +224,7 @@ sequenceDiagram
 | `EMAIL_VERIFICATION_TTL_HOURS` | `24` | Tokens de verificación |
 | `PASSWORD_RESET_TTL_MINUTES` | `30` | Tokens de reset |
 | `AUTH_THROTTLE_TTL_MS` / `AUTH_THROTTLE_LIMIT` | `60000` / `5` | Límite en `/auth/*` |
+| `TRUST_PROXY` | sin valor (sin proxy) | Saltos de confianza para `X-Forwarded-For` (el compose lo fija en 1; acepta número o direcciones) |
 | `REFRESH_THROTTLE_TTL_MS` / `REFRESH_THROTTLE_LIMIT` | `60000` / `60` | Límite propio de `POST /auth/refresh` y `POST /auth/logout` |
 | `REFRESH_ROTATION_GRACE_MS` | `30000` | Gracia para tratar un refresh rotado reutilizado como carrera benigna |
 | `WEB_APP_URL` | `http://localhost:5173` | Enlaces de correo |

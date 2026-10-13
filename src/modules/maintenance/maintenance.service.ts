@@ -63,19 +63,30 @@ export class MaintenanceService {
       select: { id: true, email: true },
     });
 
+    let usersPurged = 0;
     for (const user of pendingUsers) {
-      await this.prisma.$transaction(async (tx) => {
-        await tx.auditLog.create({
-          data: {
-            action: 'user.purged',
-            entityType: 'User',
-            entityId: user.id,
-            userId: user.id,
-            changes: JSON.stringify({ email: user.email, reason: 'PURGE_AFTER_GRACE_PERIOD' }),
-          },
+      try {
+        await this.prisma.$transaction(async (tx) => {
+          await tx.auditLog.create({
+            data: {
+              action: 'user.purged',
+              entityType: 'User',
+              entityId: user.id,
+              userId: user.id,
+              changes: JSON.stringify({ email: user.email, reason: 'PURGE_AFTER_GRACE_PERIOD' }),
+            },
+          });
+          await tx.user.delete({ where: { id: user.id } });
         });
-        await tx.user.delete({ where: { id: user.id } });
-      });
+        usersPurged += 1;
+      } catch (error) {
+        // Una cuenta problematica no debe frenar la purga de las demas.
+        this.logger.error(
+          `No se pudo purgar la cuenta ${user.id}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
     }
 
     return {
@@ -83,7 +94,7 @@ export class MaintenanceService {
       sessionsDeleted: sessions.count,
       tokensDeleted: tokens.count,
       idempotencyDeleted: idempotency.count,
-      usersPurged: pendingUsers.length,
+      usersPurged,
     };
   }
 }

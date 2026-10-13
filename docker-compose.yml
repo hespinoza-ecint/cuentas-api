@@ -31,6 +31,9 @@ services:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: '3000'
+      # nginx (servicio web) es el unico salto por delante: se confia en 1 para
+      # tomar la IP real del cliente en X-Forwarded-For.
+      TRUST_PROXY: '1'
     # Formato: <IP_del_host>:<puerto_del_host> (el puerto interno 3000 lo agrega
     # el compose). Sobrescribe API_BIND (ej. 0.0.0.0:31415) si necesitas exponerlo.
     ports:

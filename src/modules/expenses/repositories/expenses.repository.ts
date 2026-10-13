@@ -48,7 +48,14 @@ export class ExpensesRepository {
               },
             }
           : {}),
-        ...(cursor ? { createdAt: { lt: cursor.createdAt } } : {}),
+        ...(cursor
+          ? {
+              OR: [
+                { createdAt: { lt: cursor.createdAt } },
+                { createdAt: cursor.createdAt, id: { lt: cursor.id } },
+              ],
+            }
+          : {}),
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,

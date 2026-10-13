@@ -1,6 +1,7 @@
 import { NestFastifyApplication } from '@nestjs/platform-fastify';
 import request from 'supertest';
 import { addDays, todayInTimeZone } from '../../src/domain/shared/local-date';
+import { PrismaService } from '../../src/infrastructure/prisma/prisma.service';
 import {
   authHeader,
   createCashAccount,
@@ -199,5 +200,51 @@ describe('Movimientos de efectivo (integracion)', () => {
       .set(...authHeader(user.accessToken))
       .expect(200);
     expect(accountAfter.body.currentBalance).toBe(95000);
+  });
+
+  it('pagina sin saltarse movimientos con la misma marca de tiempo', async () => {
+    const user = await createVerifiedUser(app, 'cursor-collision');
+    const account = await createCashAccount(app, user.accessToken, { openingBalance: 100000 });
+    const today = todayInTimeZone('America/Mexico_City');
+
+    for (let index = 1; index <= 4; index += 1) {
+      await request(app.getHttpServer())
+        .post('/api/v1/cash-movements/adjustments')
+        .set(...authHeader(user.accessToken))
+        .send({
+          cashAccountId: account.id,
+          amount: index * -1000,
+          occurredOn: today,
+          description: `Ajuste ${index}`,
+          reason: 'Prueba de cursor',
+        })
+        .expect(201);
+    }
+
+    // Fuerza la colision: todos los movimientos con la misma marca de tiempo.
+    const prisma = app.get(PrismaService);
+    await prisma.cashMovement.updateMany({
+      where: { userId: user.userId },
+      data: { createdAt: new Date('2026-10-01T12:00:00.000Z') },
+    });
+
+    const first = await request(app.getHttpServer())
+      .get(`/api/v1/cash-movements?cashAccountId=${account.id}&limit=2`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(first.body.data).toHaveLength(2);
+
+    const second = await request(app.getHttpServer())
+      .get(
+        `/api/v1/cash-movements?cashAccountId=${account.id}&limit=2&cursor=${first.body.meta.nextCursor}`,
+      )
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+
+    const ids = new Set(
+      [...first.body.data, ...second.body.data].map((movement: { id: string }) => movement.id),
+    );
+    expect(second.body.data).toHaveLength(2);
+    expect(ids.size).toBe(4); // paginas completas: nada se salta
   });
 });
