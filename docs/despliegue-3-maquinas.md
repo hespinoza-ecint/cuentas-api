@@ -223,6 +223,9 @@ sudo -u cuentas npm run build
 sudo systemctl restart cuentas-api
 ```
 
+Los cambios de esquema se aplican a mano antes de desplegar el código: guía
+detallada en [actualizar-mysql.md](actualizar-mysql.md).
+
 ### Frontend
 
 ```bash

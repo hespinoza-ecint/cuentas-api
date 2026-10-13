@@ -158,6 +158,9 @@ Revisa el SQL generado y aplícalo a la base. También puedes regenerar
 `prisma/mysql/init.sql` con `npm run mysql:sql` (útil solo para instalaciones
 nuevas).
 
+Guía detallada de actualización de esquema (respaldo, verificación y rollback):
+[actualizar-mysql.md](actualizar-mysql.md).
+
 ## 6. Tareas puntuales (imagen `api-seed`)
 
 La etapa `seed` reutiliza la compilación con devDependencies y el CLI de Prisma:

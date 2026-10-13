@@ -114,6 +114,8 @@ Toda la configuración vive en `.env` (ver `.env.example`). La aplicación **no 
 - **PM2:** `npm run build && pm2 start ecosystem.config.js` (una instancia con SQLite).
 - **Variables:** copia `.env.production.example` a `.env.production` (Docker) o `.env` (PM2/systemd).
 - **Respaldos SQLite:** `npm run db:backup` en cron; con MySQL usa `mysqldump`.
+- **Actualizar el esquema de MySQL:** guía paso a paso (respaldo → diff →
+  aplicar → verificar) en [docs/actualizar-mysql.md](docs/actualizar-mysql.md).
 - **Mantenimiento:** cron diario 03:00 + `POST /api/v1/admin/maintenance/run` (ADMIN).
 - Detalle de fases previas en [docs/fase-07-produccion.md](docs/fase-07-produccion.md).
 
