@@ -25,6 +25,7 @@ import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { CardLedgerService } from '../card-ledger/card-ledger.service';
 import { CardsService } from '../cards/cards.service';
+import { StatementsService } from '../cards/statements.service';
 import { CategoriesService } from '../categories/categories.service';
 import { HolidayCalendarService } from '../holidays/holiday-calendar.service';
 import { InstallmentsService } from '../installments/installments.service';
@@ -44,9 +45,15 @@ import {
 } from './repositories/purchases.repository';
 
 export interface PaginatedPurchases {
-  data: PurchaseWithPlan[];
+  data: PurchaseView[];
   meta: { limit: number; nextCursor: string | null; hasMore: boolean };
 }
+
+/** RN-30: motivo por el que una compra no se puede cancelar ni eliminar. */
+export type PurchaseLockedReason = 'STATEMENT_PAID' | 'PLAN_HAS_PAYMENTS' | null;
+
+/** Compra tal como la expone la API, con la pista de bloqueo para la interfaz. */
+export type PurchaseView = PurchaseWithPlan & { lockedReason: PurchaseLockedReason };
 
 /** Resultado de eliminar una compra con plan. */
 export interface DeletePurchaseResult {
@@ -74,6 +81,7 @@ export class PurchasesService {
     private readonly categories: CategoriesService,
     private readonly holidays: HolidayCalendarService,
     private readonly installments: InstallmentsService,
+    private readonly statements: StatementsService,
     private readonly datePolicy: FinancialDatePolicy,
     private readonly audit: AuditService,
   ) {}
@@ -81,15 +89,19 @@ export class PurchasesService {
   async list(userId: string, query: ListPurchasesQueryDto): Promise<PaginatedPurchases> {
     const limit = query.limit ?? 20;
     const { items, nextCursor } = await this.purchases.list(userId, query, limit);
-    return { data: items, meta: { limit, nextCursor, hasMore: nextCursor !== null } };
+    return {
+      data: await this.withLockedReason(userId, items),
+      meta: { limit, nextCursor, hasMore: nextCursor !== null },
+    };
   }
 
-  async get(userId: string, id: string): Promise<PurchaseWithPlan> {
+  async get(userId: string, id: string): Promise<PurchaseView> {
     const purchase = await this.purchases.findById(userId, id);
     if (!purchase) {
       throw new NotFoundError('La compra no existe.', { reason: 'PURCHASE_NOT_FOUND' });
     }
-    return purchase;
+    const [view] = await this.withLockedReason(userId, [purchase]);
+    return view;
   }
 
   async getPlan(userId: string, planId: string): Promise<PlanWithPurchase> {
@@ -106,7 +118,7 @@ export class PurchasesService {
     dto: CreatePurchaseDto,
     meta: RequestMeta,
     origin?: PurchaseOriginOptions,
-  ): Promise<PurchaseWithPlan> {
+  ): Promise<PurchaseView> {
     const card = await this.cardsService.get(userId, dto.creditCardId);
 
     if (card.status !== 'ACTIVE') {
@@ -412,7 +424,7 @@ export class PurchasesService {
     id: string,
     dto: CancelPurchaseDto,
     meta: RequestMeta,
-  ): Promise<PurchaseWithPlan> {
+  ): Promise<PurchaseView> {
     const purchase = await this.purchases.findRaw(userId, id);
     if (!purchase) {
       throw new NotFoundError('La compra no existe.', { reason: 'PURCHASE_NOT_FOUND' });
@@ -421,17 +433,7 @@ export class PurchasesService {
       throw new ConflictError('La compra no esta activa.', { reason: 'PURCHASE_NOT_ACTIVE' });
     }
 
-    if (purchase.installmentPlan) {
-      const paidInstallments = await this.prisma.installment.count({
-        where: { planId: purchase.installmentPlan.id, paidAmount: { gt: 0 } },
-      });
-      if (paidInstallments > 0) {
-        throw new UnprocessableEntityError(
-          'La compra tiene mensualidades pagadas. Corrige con un ajuste o una conciliacion.',
-          { reason: 'PLAN_HAS_PAYMENTS' },
-        );
-      }
-    }
+    await this.assertPurchaseUnlocked(userId, purchase);
 
     const today = await this.datePolicy.today(userId);
 
@@ -512,6 +514,8 @@ export class PurchasesService {
     if (!purchase) {
       throw new NotFoundError('La compra no existe.', { reason: 'PURCHASE_NOT_FOUND' });
     }
+
+    await this.assertPurchaseUnlocked(userId, purchase);
 
     const plan = purchase.installmentPlan;
 
@@ -809,6 +813,171 @@ export class PurchasesService {
       allocations: result.allocations,
       settled,
     };
+  }
+
+  /**
+   * RN-30: una compra pertenece al corte en el que cayo su cargo. Si ese
+   * corte ya tiene pagos aplicados no se puede cancelar ni eliminar; el
+   * bloqueo se levanta al revertir el pago. Las mensualidades marcadas como
+   * pagadas fuera de la app no cuentan.
+   */
+  private async assertPurchaseUnlocked(
+    userId: string,
+    purchase: {
+      id: string;
+      creditCardId: string;
+      purchaseDate: string;
+      installmentPlan: { id: string } | null;
+    },
+  ): Promise<void> {
+    const plan = purchase.installmentPlan;
+    if (plan) {
+      const paid = await this.prisma.paymentAllocation.aggregate({
+        where: {
+          userId,
+          installment: { planId: plan.id },
+          cardPayment: { status: 'APPLIED' },
+        },
+        _sum: { amount: true },
+      });
+      if ((paid._sum.amount ?? 0) > 0) {
+        throw new UnprocessableEntityError(
+          'La compra tiene pagos aplicados. Revierte el pago del corte o corrige con un ajuste o una conciliacion.',
+          { reason: 'PLAN_HAS_PAYMENTS' },
+        );
+      }
+      return;
+    }
+
+    const card = await this.cardsService.get(userId, purchase.creditCardId);
+    const charge = await this.prisma.cardLedgerEntry.findFirst({
+      where: { userId, type: 'PURCHASE', sourceId: purchase.id },
+      select: { occurredOn: true },
+    });
+    const occurredOn = charge?.occurredOn ?? purchase.purchaseDate;
+    const cutDate = cutDateForPurchase(card.cutDay, occurredOn, card.sameDayCutIncluded);
+
+    const today = await this.datePolicy.today(userId);
+    if (compareLocalDates(cutDate, today) > 0) {
+      return; // El corte aun no ocurre: la deuda vive en el ciclo abierto.
+    }
+
+    // Materializa los cortes ya ocurridos: los anticipos del ciclo abierto se
+    // adoptan aqui, para que el bloqueo vea los pagos reales del corte.
+    await this.statements.sync(userId, card.id);
+    const statement = await this.prisma.cardStatement.findFirst({
+      where: { userId, creditCardId: card.id, cutDate },
+      select: { paidAmount: true },
+    });
+    if (statement && statement.paidAmount > 0) {
+      throw new UnprocessableEntityError(
+        'El corte de esta compra ya tiene pagos aplicados. Revierte el pago del corte o corrige con un ajuste o una conciliacion.',
+        { reason: 'PURCHASE_STATEMENT_PAID' },
+      );
+    }
+  }
+
+  /**
+   * Indicador de lectura para la interfaz: usa el ultimo estado guardado de
+   * los cortes y de las asignaciones (la API confirma el bloqueo al ejecutar,
+   * sincronizando el corte). No materializa cortes por si solo.
+   */
+  private async withLockedReason(
+    userId: string,
+    items: PurchaseWithPlan[],
+  ): Promise<PurchaseView[]> {
+    if (items.length === 0) {
+      return [];
+    }
+
+    const today = await this.datePolicy.today(userId);
+    const reasons = new Map<string, PurchaseLockedReason>();
+
+    // Planes: un pago aplicado a cualquier mensualidad bloquea la compra.
+    const planIds = items
+      .map((item) => item.installmentPlan?.id)
+      .filter((id): id is string => Boolean(id));
+    if (planIds.length > 0) {
+      const paidPlans = await this.prisma.installment.findMany({
+        where: {
+          planId: { in: planIds },
+          allocations: { some: { cardPayment: { status: 'APPLIED' } } },
+        },
+        select: { planId: true },
+        distinct: ['planId'],
+      });
+      const paidPlanIds = new Set(paidPlans.map((plan) => plan.planId));
+      for (const item of items) {
+        if (item.installmentPlan && paidPlanIds.has(item.installmentPlan.id)) {
+          reasons.set(item.id, 'PLAN_HAS_PAYMENTS');
+        }
+      }
+    }
+
+    // Regulares: el corte se deriva de la fecha de su cargo.
+    const regularItems = items.filter((item) => !item.installmentPlan);
+    if (regularItems.length > 0) {
+      const [charges, cards] = await Promise.all([
+        this.prisma.cardLedgerEntry.findMany({
+          where: {
+            userId,
+            type: 'PURCHASE',
+            sourceId: { in: regularItems.map((item) => item.id) },
+          },
+          select: { sourceId: true, occurredOn: true },
+        }),
+        this.prisma.creditCard.findMany({
+          where: {
+            userId,
+            deletedAt: null,
+            id: { in: [...new Set(regularItems.map((item) => item.creditCardId))] },
+          },
+          select: { id: true, cutDay: true, sameDayCutIncluded: true },
+        }),
+      ]);
+      const chargeDate = new Map(charges.map((charge) => [charge.sourceId, charge.occurredOn]));
+      const cardById = new Map(cards.map((card) => [card.id, card]));
+
+      // Corte de cada compra regular: solo los ya ocurridos pueden bloquear.
+      const cutByItem = new Map<string, { cardId: string; cutDate: string }>();
+      for (const item of regularItems) {
+        const card = cardById.get(item.creditCardId);
+        if (!card) {
+          continue;
+        }
+        const cutDate = cutDateForPurchase(
+          card.cutDay,
+          chargeDate.get(item.id) ?? item.purchaseDate,
+          card.sameDayCutIncluded,
+        );
+        if (compareLocalDates(cutDate, today) <= 0) {
+          cutByItem.set(item.id, { cardId: card.id, cutDate });
+        }
+      }
+
+      if (cutByItem.size > 0) {
+        const entries = [...cutByItem.values()];
+        const statements = await this.prisma.cardStatement.findMany({
+          where: {
+            userId,
+            creditCardId: { in: [...new Set(entries.map((entry) => entry.cardId))] },
+            cutDate: { in: [...new Set(entries.map((entry) => entry.cutDate))] },
+            paidAmount: { gt: 0 },
+          },
+          select: { creditCardId: true, cutDate: true },
+        });
+        const paidCuts = new Set(
+          statements.map((statement) => `${statement.creditCardId}|${statement.cutDate}`),
+        );
+        for (const [itemId, entry] of cutByItem) {
+          if (paidCuts.has(`${entry.cardId}|${entry.cutDate}`)) {
+            reasons.set(itemId, 'STATEMENT_PAID');
+          }
+        }
+      }
+    }
+
+    return items.map((item) => ({ ...item, lockedReason: reasons.get(item.id) ?? null }));
   }
 
   /** Intereses, IVA y comisiones ya cargados al libro por un plan (RN-20). */

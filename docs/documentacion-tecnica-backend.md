@@ -1224,7 +1224,7 @@ Los días que no existen en un mes se ajustan al último día. Las fechas se aju
 
 # 7. Reglas de Negocio
 
-## 7.1 Reglas formales RN-01 a RN-29 (todas implementadas)
+## 7.1 Reglas formales RN-01 a RN-30 (todas implementadas)
 
 | ID | Regla | Dónde vive |
 |---|---|---|
@@ -1254,9 +1254,10 @@ Los días que no existen en un mes se ajustan al último día. Las fechas se aju
 | RN-24 | Anualidad como cargo al corte: una proyección por año dentro de la ventana, pagadera en la fecha límite del corte que la cobra | Obligación `Anualidad {alias}` en flujo, dashboard y recomendaciones |
 | RN-25 | Gasto = efectivo/débito; compra = tarjeta; los recurrentes con tarjeta se proyectan en el pago del corte (no el día del cargo) | `Expenses` vs `Purchases`; `CashflowContextService.toCashOccurrence` |
 | RN-26 | Errores/cancelaciones se corrigen con reverso | `reverse` en movimientos/gastos/pagos; cancelación de compra con `REFUND` |
-| RN-27 | Eliminar una compra (regular, MSI o diferida) revierte en la tarjeta el cargo vivo —con plan: cargo original − pagos aplicados; regular: hasta la deuda actual— fechado en el periodo original para que los cortes ya cerrados se recalculen, y borra el registro; lo ya pagado no se toca | `PurchasesService.remove` (entrada `REFUND` con `allowBackdated`, auditoría `purchase.deleted`); en regulares resta de los cargos del periodo (`statements.service`) |
+| RN-27 | Eliminar una compra (regular, MSI o diferida) revierte en la tarjeta el cargo vivo —con plan: cargo original − pagos aplicados; regular: hasta la deuda actual— fechado en el periodo original para que los cortes ya cerrados se recalculen, y borra el registro; lo ya pagado no se toca. Si el corte del cargo ya tiene pagos aplicados la eliminación responde 422 (RN-30) | `PurchasesService.remove` (entrada `REFUND` con `allowBackdated`, auditoría `purchase.deleted`; guardia `assertPurchaseUnlocked`); en regulares resta de los cargos del periodo (`statements.service`) |
 | RN-28 | Reiniciar una tarjeta borra su dominio completo y la deja con saldo 0 y crédito completo; eliminarla borra además la tarjeta y los recurrentes ligados a ella. Los movimientos de efectivo de pagos no se tocan | `CardsService.reset` / `CardsService.remove` (`purgeDomain`, auditorías `credit_card.reset` / `credit_card.deleted`) |
 | RN-29 | La proyección de flujo usa una **ventana de fechas** (`from`/`to`): por defecto hoy → hoy + 30 días, `from` no puede ser anterior a hoy, máximo 5 años; lo anterior a `from` mueve el saldo inicial y lo posterior a `to` se recorta | `CashflowContextService.resolveWindow` + `CashflowService.projection` |
+| RN-30 | Una compra de un corte ya pagado no se puede cancelar ni eliminar; al revertir el pago vuelve a estarlo. Con plan bloquea cualquier pago aplicado a una mensualidad (las pagadas fuera de la app no cuentan); en regulares bloquea el corte del cargo, y el sincronizado previo materializa los cortes y adopta los anticipos del ciclo abierto | `PurchasesService.assertPurchaseUnlocked` (`422 PURCHASE_STATEMENT_PAID` / `422 PLAN_HAS_PAYMENTS`); pista `lockedReason` en las respuestas de compras |
 
 | Recurrente con tarjeta se confirma como compra | `paymentMethod = CREDIT_CARD` crea `Purchase` REGULAR + entrada `PURCHASE`; efectivo crea `Expense` + movimiento | `PAYMENT_METHOD_REQUIRED`, `CREDIT_CARD_REQUIRED`, `CARD_NOT_FOUND`, `CARD_INACTIVE` |
 | Una ocurrencia se confirma una sola vez | Único `(recurringExpenseId, occurrenceDate)` en Expense y Purchase | `OCCURRENCE_ALREADY_CONFIRMED` |
@@ -1952,9 +1953,11 @@ Errores: `422 PAYMENT_EXCEEDS_BALANCE`, `422 CARD_WITHOUT_BALANCE`, `422 CARD_IN
 | POST | `/purchases` | Registra compra (regular/MSI/diferida) — **@Idempotent** |
 | GET | `/purchases/:id` | Detalle |
 | POST | `/purchases/:id/cancel` | Cancelación/devolución (solo sin pagos) |
-| DELETE | `/purchases/:id` | Eliminar compra (regular, MSI o diferida), con pagos incluidos (RN-27) |
+| DELETE | `/purchases/:id` | Eliminar compra (regular, MSI o diferida) solo si su corte no tiene pagos aplicados (RN-27 y RN-30) |
 | GET | `/installment-plans/:id` | Plan + mensualidades |
 | POST | `/installment-plans/:id/prepay` | Anticipo/liquidación — **@Idempotent** |
+
+Todas las respuestas de compras (listado, detalle, alta y cancelación) incluyen `lockedReason`: `null`, `"STATEMENT_PAID"` (el corte del cargo ya tiene pagos) o `"PLAN_HAS_PAYMENTS"` (una mensualidad tiene pagos aplicados). Es una pista de solo lectura para que la interfaz oculte cancelar/eliminar; la API confirma el bloqueo al ejecutar (RN-30).
 
 **POST /purchases (REGULAR) → 201**
 ```json
@@ -1990,19 +1993,19 @@ Errores: `422 PAYMENT_EXCEEDS_BALANCE`, `422 CARD_WITHOUT_BALANCE`, `422 CARD_IN
 **POST /purchases (MSI ya iniciada) → 201** · `"firstStatementMonth": "2026-05"` fija el primer corte en ese mes: las mensualidades ya vencidas se crean `PAID` (sin estado de cuenta) y la tarjeta solo carga el principal pendiente; `estimatedMonthlyPayment` pasa a ser el promedio de las vigentes y la proyección únicamente cuenta las pendientes. El `amount` sigue siendo el monto original y `purchase.amount` no cambia.
 Errores: `400 MONTHS_REQUIRED`, `400 MSI_WITH_RATE`, `400 RATE_REQUIRED`, `400 START_MONTH_REQUIRES_PLAN`, `422 PLAN_ALREADY_PAID_OFF`, `400 RECOMMENDATION_NOT_FOUND`, `422 CARD_INACTIVE`, `400 CATEGORY_KIND_MISMATCH`.
 
-**POST /purchases/:id/cancel → 201** · `{ "reason": "Devolución completa" }` → compra `CANCELLED`, plan `CANCELLED`, mensualidades `CANCELLED`, entrada `REFUND` que restaura el crédito. Errores: `409 PURCHASE_NOT_ACTIVE`, `422 PLAN_HAS_PAYMENTS`.
+**POST /purchases/:id/cancel → 201** · `{ "reason": "Devolución completa" }` → compra `CANCELLED`, plan `CANCELLED`, mensualidades `CANCELLED`, entrada `REFUND` que restaura el crédito. Errores: `409 PURCHASE_NOT_ACTIVE`, `422 PLAN_HAS_PAYMENTS` (RN-30), `422 PURCHASE_STATEMENT_PAID` (RN-30).
 
-**DELETE /purchases/:id → 200** · `{ "reason": "Registrada por error" }` → elimina la compra aunque tenga mensualidades pagadas o sea regular. Revierte en el libro de la tarjeta el cargo vivo **fechado en el periodo original del cargo** (compensación interna `allowBackdated`, no depende del límite de días hacia atrás) y borra la compra (con su plan y mensualidades en cascada si los tiene), registrando `purchase.deleted` en auditoría. Al recalcularse, los cortes ya cerrados que incluían la compra dejan de exigir su pago:
+**DELETE /purchases/:id → 200** · `{ "reason": "Registrada por error" }` → elimina la compra (regular, MSI o diferida) **solo si su corte no tiene pagos aplicados** (RN-30): si los tiene responde `422 PURCHASE_STATEMENT_PAID` (regular) o `422 PLAN_HAS_PAYMENTS` (con plan) y, al revertir el pago, queda libre. Revierte en el libro de la tarjeta el cargo vivo **fechado en el periodo original del cargo** (compensación interna `allowBackdated`, no depende del límite de días hacia atrás) y borra la compra (con su plan y mensualidades en cascada si los tiene), registrando `purchase.deleted` en auditoría. Al recalcularse, los cortes ya cerrados que incluían la compra dejan de exigir su pago:
 
 - **Con plan (MSI/diferida):** `refundedPrincipal = cargo original − pagos/anticipos aplicados`. Si el plan ya estaba cancelado, no hay doble reverso.
-- **Regular:** los pagos se aplican a cortes completos, no a cada compra; se revierte `min(monto, deuda viva de la tarjeta)`, así que una compra ya pagada no genera saldo a favor.
+- **Regular:** los pagos se aplican a cortes completos, no a cada compra; se revierte `min(monto, deuda viva de la tarjeta)`, así que el borrado nunca genera saldo a favor (y el caso "ya pagada" queda bloqueado por RN-30).
 
 Los pagos y movimientos de efectivo ya hechos no se modifican; los estados de cuenta se recalculan del libro al consultarse.
 ```json
 // Response
 { "deleted": true, "refundedPrincipal": 60000, "paidAmount": 30000 }
 ```
-Errores: `404 PURCHASE_NOT_FOUND` (también si es de otro usuario).
+Errores: `404 PURCHASE_NOT_FOUND` (también si es de otro usuario), `422 PURCHASE_STATEMENT_PAID` / `422 PLAN_HAS_PAYMENTS` (RN-30; se liberan al revertir el pago).
 
 **GET /installment-plans/:id → 200**
 ```json

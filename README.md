@@ -240,6 +240,7 @@ cuentas-api/
 - [Fase 26 — Integridad de movimientos y gastos recurrentes](docs/fase-26-integridad-recurrentes.md)
 - [Fase 27 — Intereses e IVA de compras diferidas en el libro (RN-20)](docs/fase-27-intereses-en-el-libro.md)
 - [Fase 28 — Menores: cursores, proxy, purga y reversos fechados](docs/fase-28-menores.md)
+- [Fase 30 — Compras de un corte pagado: no se cancelan ni se eliminan (RN-30)](docs/fase-30-compras-corte-pagado.md)
 
 ## Documentación técnica completa
 

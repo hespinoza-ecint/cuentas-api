@@ -51,6 +51,21 @@ describe('Compras y mensualidades (integracion)', () => {
     return response.body;
   }
 
+  async function payCard(
+    user: TestUser,
+    cardId: string,
+    cashAccountId: string,
+    amount: number,
+    paymentDate: string,
+  ): Promise<Record<string, any>> {
+    const response = await request(app.getHttpServer())
+      .post('/api/v1/card-payments')
+      .set(...authHeader(user.accessToken))
+      .send({ creditCardId: cardId, cashAccountId, amount, paymentDate })
+      .expect(201);
+    return response.body;
+  }
+
   it('registra una compra regular y ocupa credito disponible', async () => {
     const user = await createVerifiedUser(app, 'purchase-regular');
     const card = await createCard(app, user.accessToken, { creditLimit: 3000000 });
@@ -280,7 +295,7 @@ describe('Compras y mensualidades (integracion)', () => {
     expect(blocked.body.reason).toBe('PLAN_HAS_PAYMENTS');
   });
 
-  it('RN-27: elimina una compra MSI con pagos, revierte lo pendiente y ajusta la tarjeta', async () => {
+  it('RN-30: no elimina una compra MSI con pagos aplicados', async () => {
     const user = await createVerifiedUser(app, 'purchase-delete');
     const card = await createCard(app, user.accessToken, { creditLimit: 3000000 });
     const account = await createCashAccount(app, user.accessToken, { openingBalance: 500000 });
@@ -288,64 +303,54 @@ describe('Compras y mensualidades (integracion)', () => {
 
     const purchase = await createPurchase(user, {
       creditCardId: card.id,
-      description: 'MSI por eliminar',
+      description: 'MSI con pagos',
       amount: 90000,
       purchaseDate: today,
       type: 'MSI',
       months: 3,
     });
 
-    // Paga la primera mensualidad: la cancelacion normal ya no aplica.
+    // Paga la primera mensualidad: con pagos aplicados ya no se elimina.
     await request(app.getHttpServer())
       .post(`/api/v1/installment-plans/${purchase.installmentPlan.id}/prepay`)
       .set(...authHeader(user.accessToken))
       .send({ cashAccountId: account.id, amount: 30000, paymentDate: today })
       .expect(201);
 
-    const removed = await request(app.getHttpServer())
+    const blocked = await request(app.getHttpServer())
       .delete(`/api/v1/purchases/${purchase.id}`)
       .set(...authHeader(user.accessToken))
       .send({ reason: 'Registrada por error' })
+      .expect(422);
+    expect(blocked.body.reason).toBe('PLAN_HAS_PAYMENTS');
+
+    // La compra sigue con su plan y el saldo de la tarjeta no cambia.
+    const detail = await request(app.getHttpServer())
+      .get(`/api/v1/purchases/${purchase.id}`)
+      .set(...authHeader(user.accessToken))
       .expect(200);
+    expect(detail.body.status).toBe('ACTIVE');
+    expect(detail.body.lockedReason).toBe('PLAN_HAS_PAYMENTS');
 
-    expect(removed.body.deleted).toBe(true);
-    expect(removed.body.refundedPrincipal).toBe(60000);
-    expect(removed.body.paidAmount).toBe(30000);
-
-    // La tarjeta queda sin la deuda pendiente de la compra.
     const cardAfter = await request(app.getHttpServer())
       .get(`/api/v1/cards/${card.id}`)
       .set(...authHeader(user.accessToken))
       .expect(200);
-    expect(cardAfter.body.currentBalance).toBe(0);
-    expect(cardAfter.body.availableCredit).toBe(3000000);
+    expect(cardAfter.body.currentBalance).toBe(60000);
+    expect(cardAfter.body.availableCredit).toBe(2940000);
 
-    // El registro desaparece (compra y plan).
-    await request(app.getHttpServer())
-      .get(`/api/v1/purchases/${purchase.id}`)
-      .set(...authHeader(user.accessToken))
-      .expect(404);
-    await request(app.getHttpServer())
-      .get(`/api/v1/installment-plans/${purchase.installmentPlan.id}`)
-      .set(...authHeader(user.accessToken))
-      .expect(404);
-
-    // Los cortes siguen respondiendo y se recalculan sin las mensualidades.
-    const statements = await request(app.getHttpServer())
-      .get(`/api/v1/cards/${card.id}/statements`)
+    // La lista tambien expone el motivo para que la interfaz oculte las acciones.
+    const list = await request(app.getHttpServer())
+      .get('/api/v1/purchases')
       .set(...authHeader(user.accessToken))
       .expect(200);
-    expect(Array.isArray(statements.body)).toBe(true);
-
-    // El efectivo ya pagado no se toca.
-    const accountAfter = await request(app.getHttpServer())
-      .get(`/api/v1/cash-accounts/${account.id}`)
-      .set(...authHeader(user.accessToken))
-      .expect(200);
-    expect(accountAfter.body.currentBalance).toBe(470000);
+    const listed = (list.body.data as Array<{ id: string; lockedReason: string | null }>).find(
+      (item) => item.id === purchase.id,
+    );
+    expect(listed?.lockedReason).toBe('PLAN_HAS_PAYMENTS');
   });
 
-  it('RN-27: elimina una compra liquidada sin tocar el saldo de la tarjeta', async () => {
+  it('RN-30: no elimina una compra MSI liquidada', async () => {
     const user = await createVerifiedUser(app, 'purchase-delete-paid');
     const card = await createCard(app, user.accessToken, { creditLimit: 3000000 });
     const account = await createCashAccount(app, user.accessToken, { openingBalance: 500000 });
@@ -366,28 +371,29 @@ describe('Compras y mensualidades (integracion)', () => {
       .send({ cashAccountId: account.id, amount: 90000, paymentDate: today })
       .expect(201);
 
-    const removed = await request(app.getHttpServer())
+    const blocked = await request(app.getHttpServer())
       .delete(`/api/v1/purchases/${purchase.id}`)
       .set(...authHeader(user.accessToken))
       .send({ reason: 'Limpiar historial' })
-      .expect(200);
+      .expect(422);
+    expect(blocked.body.reason).toBe('PLAN_HAS_PAYMENTS');
 
-    expect(removed.body.refundedPrincipal).toBe(0);
-    expect(removed.body.paidAmount).toBe(90000);
+    // El registro sigue en el historial con sus pagos aplicados.
+    const detail = await request(app.getHttpServer())
+      .get(`/api/v1/purchases/${purchase.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(detail.body.status).toBe('PAID');
+    expect(detail.body.lockedReason).toBe('PLAN_HAS_PAYMENTS');
 
     const cardAfter = await request(app.getHttpServer())
       .get(`/api/v1/cards/${card.id}`)
       .set(...authHeader(user.accessToken))
       .expect(200);
     expect(cardAfter.body.currentBalance).toBe(0);
-
-    await request(app.getHttpServer())
-      .get(`/api/v1/purchases/${purchase.id}`)
-      .set(...authHeader(user.accessToken))
-      .expect(404);
   });
 
-  it('RN-27: elimina una compra MSI al corriente sin doble reverso', async () => {
+  it('RN-27 y RN-30: elimina una compra MSI al corriente (sus pagadas no son de la app)', async () => {
     const user = await createVerifiedUser(app, 'purchase-delete-ongoing');
     const today = todayInTimeZone('America/Mexico_City');
     const card = await createCard(app, user.accessToken, {
@@ -461,51 +467,213 @@ describe('Compras y mensualidades (integracion)', () => {
       .expect(404);
   });
 
-  it('RN-27: una compra regular ya pagada no genera saldo a favor', async () => {
-    const user = await createVerifiedUser(app, 'purchase-delete-paid');
-    const card = await createCard(app, user.accessToken, { creditLimit: 3000000 });
+  it('RN-30: una compra regular de un corte pagado no se cancela ni se elimina', async () => {
+    travelTo('2026-10-20');
+    const user = await createVerifiedUser(app, 'purchase-stmt-paid');
+    const card = await createCard(app, user.accessToken, {
+      creditLimit: 3000000,
+      cutDay: 15,
+      dueDaysAfterCut: 20,
+    });
     const account = await createCashAccount(app, user.accessToken, { openingBalance: 500000 });
-    const today = todayInTimeZone('America/Mexico_City');
 
+    // Compra del 10 de octubre: su corte (15 de octubre) ya cerro.
     const regular = await createPurchase(user, {
       creditCardId: card.id,
       description: 'Regular ya pagada',
       amount: 10000,
-      purchaseDate: today,
+      purchaseDate: '2026-10-10',
       type: 'REGULAR',
     });
 
-    // Se cubre el saldo completo de la tarjeta.
-    await request(app.getHttpServer())
-      .post('/api/v1/card-payments')
-      .set(...authHeader(user.accessToken))
-      .send({
-        creditCardId: card.id,
-        cashAccountId: account.id,
-        amount: 10000,
-        paymentDate: today,
-      })
-      .expect(201);
+    await payCard(user, card.id, account.id, 10000, '2026-10-20');
 
-    const cardAfterPayment = await request(app.getHttpServer())
-      .get(`/api/v1/cards/${card.id}`)
+    // Ambas correcciones quedan bloqueadas.
+    const blockedCancel = await request(app.getHttpServer())
+      .post(`/api/v1/purchases/${regular.id}/cancel`)
       .set(...authHeader(user.accessToken))
-      .expect(200);
-    expect(cardAfterPayment.body.currentBalance).toBe(0);
+      .send({ reason: 'Devolucion completa' })
+      .expect(422);
+    expect(blockedCancel.body.reason).toBe('PURCHASE_STATEMENT_PAID');
 
-    const removed = await request(app.getHttpServer())
+    const blockedDelete = await request(app.getHttpServer())
       .delete(`/api/v1/purchases/${regular.id}`)
       .set(...authHeader(user.accessToken))
       .send({ reason: 'Limpiar historial' })
-      .expect(200);
+      .expect(422);
+    expect(blockedDelete.body.reason).toBe('PURCHASE_STATEMENT_PAID');
 
-    expect(removed.body.refundedPrincipal).toBe(0);
+    // La compra sigue y el corte se mantiene pagado.
+    const detail = await request(app.getHttpServer())
+      .get(`/api/v1/purchases/${regular.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(detail.body.status).toBe('ACTIVE');
+    expect(detail.body.lockedReason).toBe('STATEMENT_PAID');
 
     const cardAfter = await request(app.getHttpServer())
       .get(`/api/v1/cards/${card.id}`)
       .set(...authHeader(user.accessToken))
       .expect(200);
     expect(cardAfter.body.currentBalance).toBe(0);
+  });
+
+  it('RN-30: un pago parcial tambien bloquea la compra', async () => {
+    travelTo('2026-10-20');
+    const user = await createVerifiedUser(app, 'purchase-partial');
+    const card = await createCard(app, user.accessToken, {
+      creditLimit: 3000000,
+      cutDay: 15,
+      dueDaysAfterCut: 20,
+    });
+    const account = await createCashAccount(app, user.accessToken, { openingBalance: 500000 });
+
+    const regular = await createPurchase(user, {
+      creditCardId: card.id,
+      description: 'Compra con abono',
+      amount: 10000,
+      purchaseDate: '2026-10-10',
+      type: 'REGULAR',
+    });
+
+    await payCard(user, card.id, account.id, 4000, '2026-10-20');
+
+    const statements = await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}/statements`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(statements.body[0].status).toBe('PARTIALLY_PAID');
+    expect(statements.body[0].paidAmount).toBe(4000);
+
+    const detail = await request(app.getHttpServer())
+      .get(`/api/v1/purchases/${regular.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(detail.body.lockedReason).toBe('STATEMENT_PAID');
+
+    const blocked = await request(app.getHttpServer())
+      .delete(`/api/v1/purchases/${regular.id}`)
+      .set(...authHeader(user.accessToken))
+      .send({ reason: 'Registrada por error' })
+      .expect(422);
+    expect(blocked.body.reason).toBe('PURCHASE_STATEMENT_PAID');
+  });
+
+  it('RN-30: revertir el pago libera la compra', async () => {
+    travelTo('2026-10-20');
+    const user = await createVerifiedUser(app, 'purchase-unlock');
+    const card = await createCard(app, user.accessToken, {
+      creditLimit: 3000000,
+      cutDay: 15,
+      dueDaysAfterCut: 20,
+    });
+    const account = await createCashAccount(app, user.accessToken, { openingBalance: 500000 });
+
+    const regular = await createPurchase(user, {
+      creditCardId: card.id,
+      description: 'Compra liberable',
+      amount: 10000,
+      purchaseDate: '2026-10-10',
+      type: 'REGULAR',
+    });
+
+    const payment = await payCard(user, card.id, account.id, 10000, '2026-10-20');
+
+    await request(app.getHttpServer())
+      .delete(`/api/v1/purchases/${regular.id}`)
+      .set(...authHeader(user.accessToken))
+      .send({ reason: 'Registrada por error' })
+      .expect(422);
+
+    await request(app.getHttpServer())
+      .post(`/api/v1/card-payments/${payment.payment.id}/reverse`)
+      .set(...authHeader(user.accessToken))
+      .send({ reason: 'Pago duplicado' })
+      .expect(201);
+
+    const removed = await request(app.getHttpServer())
+      .delete(`/api/v1/purchases/${regular.id}`)
+      .set(...authHeader(user.accessToken))
+      .send({ reason: 'Registrada por error' })
+      .expect(200);
+    expect(removed.body.refundedPrincipal).toBe(10000);
+
+    const cardAfter = await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(cardAfter.body.currentBalance).toBe(0);
+  });
+
+  it('RN-30: en el ciclo abierto la compra todavia se puede eliminar', async () => {
+    travelTo('2026-10-12');
+    const user = await createVerifiedUser(app, 'purchase-open-cycle');
+    const card = await createCard(app, user.accessToken, {
+      creditLimit: 3000000,
+      cutDay: 15,
+      dueDaysAfterCut: 20,
+    });
+    const account = await createCashAccount(app, user.accessToken, { openingBalance: 500000 });
+
+    // Compra del 5 de octubre: el corte del 15 aun no llega.
+    const regular = await createPurchase(user, {
+      creditCardId: card.id,
+      description: 'Compra del ciclo abierto',
+      amount: 10000,
+      purchaseDate: '2026-10-05',
+      type: 'REGULAR',
+    });
+
+    // Anticipo adelantado: queda huerfano hasta que cierre el corte.
+    await payCard(user, card.id, account.id, 10000, '2026-10-12');
+
+    const open = await request(app.getHttpServer())
+      .get(`/api/v1/purchases/${regular.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(open.body.lockedReason).toBeNull();
+
+    const removed = await request(app.getHttpServer())
+      .delete(`/api/v1/purchases/${regular.id}`)
+      .set(...authHeader(user.accessToken))
+      .send({ reason: 'Registrada por error' })
+      .expect(200);
+    expect(removed.body.refundedPrincipal).toBe(0);
+  });
+
+  it('RN-30: al cerrar el corte, el anticipo adoptado bloquea la compra', async () => {
+    travelTo('2026-10-12');
+    const user = await createVerifiedUser(app, 'purchase-adopt');
+    const card = await createCard(app, user.accessToken, {
+      creditLimit: 3000000,
+      cutDay: 15,
+      dueDaysAfterCut: 20,
+    });
+    const account = await createCashAccount(app, user.accessToken, { openingBalance: 500000 });
+
+    const regular = await createPurchase(user, {
+      creditCardId: card.id,
+      description: 'Compra con anticipo',
+      amount: 10000,
+      purchaseDate: '2026-10-05',
+      type: 'REGULAR',
+    });
+    await payCard(user, card.id, account.id, 10000, '2026-10-12');
+
+    // Cierra el corte: el intento sincroniza, adopta el anticipo y bloquea.
+    travelTo('2026-11-02');
+    const blocked = await request(app.getHttpServer())
+      .delete(`/api/v1/purchases/${regular.id}`)
+      .set(...authHeader(user.accessToken))
+      .send({ reason: 'Registrada por error' })
+      .expect(422);
+    expect(blocked.body.reason).toBe('PURCHASE_STATEMENT_PAID');
+
+    const locked = await request(app.getHttpServer())
+      .get(`/api/v1/purchases/${regular.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(locked.body.lockedReason).toBe('STATEMENT_PAID');
   });
 
   it('RN-27: respeta el aislamiento entre usuarios', async () => {
@@ -1037,7 +1205,7 @@ describe('Compras y mensualidades (integracion)', () => {
     expect(cardAfter.body.currentBalance).toBe(0);
   });
 
-  it('eliminar una diferida revierte intereses facturados y pagos aplicados', async () => {
+  it('RN-30: no elimina una diferida con pagos aplicados', async () => {
     travelTo('2026-10-12');
     const user = await createVerifiedUser(app, 'deferred-remove');
     const { card, account, purchase, first } = await createDeferredPlan(user);
@@ -1058,20 +1226,18 @@ describe('Compras y mensualidades (integracion)', () => {
       })
       .expect(201);
 
-    const removed = await request(app.getHttpServer())
+    const blocked = await request(app.getHttpServer())
       .delete(`/api/v1/purchases/${purchase.id}`)
       .set(...authHeader(user.accessToken))
       .send({ reason: 'Registrada por error' })
-      .expect(200);
+      .expect(422);
+    expect(blocked.body.reason).toBe('PLAN_HAS_PAYMENTS');
 
-    // Reversa todo lo cargado por el plan (principal + intereses facturados)
-    // menos lo ya pagado.
-    expect(removed.body.refundedPrincipal).toBe(120000 - first.principal);
-
-    const cardAfter = await request(app.getHttpServer())
-      .get(`/api/v1/cards/${card.id}`)
+    // La compra sigue con su plan y sus pagos aplicados.
+    const detail = await request(app.getHttpServer())
+      .get(`/api/v1/purchases/${purchase.id}`)
       .set(...authHeader(user.accessToken))
       .expect(200);
-    expect(cardAfter.body.currentBalance).toBe(0);
+    expect(detail.body.lockedReason).toBe('PLAN_HAS_PAYMENTS');
   });
 });
