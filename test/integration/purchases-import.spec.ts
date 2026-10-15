@@ -1,6 +1,7 @@
 import { NestFastifyApplication } from '@nestjs/platform-fastify';
 import request from 'supertest';
 import { ClockService } from '../../src/infrastructure/clock/clock.module';
+import { PrismaService } from '../../src/infrastructure/prisma/prisma.service';
 import {
   authHeader,
   createCard,
@@ -13,11 +14,13 @@ import { createTestApp } from '../helpers/test-app';
 describe('Importacion de compras desde Excel (RN-31)', () => {
   let app: NestFastifyApplication;
   let clock: ClockService;
+  let prisma: PrismaService;
   let realNow: () => Date;
 
   beforeAll(async () => {
     app = await createTestApp();
     clock = app.get(ClockService);
+    prisma = app.get(PrismaService);
     realNow = clock.now.bind(clock);
   });
 
@@ -190,6 +193,17 @@ describe('Importacion de compras desde Excel (RN-31)', () => {
 
     expect(response.body.createdCount).toBe(2);
     expect(response.body.purchaseIds).toHaveLength(2);
+
+    // La auditoria distingue el alta manual de la importacion (RN-31).
+    const audits = await prisma.auditLog.findMany({
+      where: { action: 'purchase.created', entityId: { in: response.body.purchaseIds } },
+      select: { changes: true },
+    });
+    expect(audits).toHaveLength(2);
+    for (const audit of audits) {
+      const changes = JSON.parse(audit.changes as string) as { origin?: string };
+      expect(changes.origin).toBe('IMPORT');
+    }
 
     const list = await request(app.getHttpServer())
       .get('/api/v1/purchases')

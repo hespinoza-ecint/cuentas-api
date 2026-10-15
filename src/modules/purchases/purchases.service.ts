@@ -505,25 +505,7 @@ export class PurchasesService {
     const cutDates = dto.rows.map((row) =>
       cutDateForPurchase(card.cutDay, row.purchaseDate, card.sameDayCutIncluded),
     );
-    const pastCuts = [
-      ...new Set(cutDates.filter((cut) => compareLocalDates(cut, dateContext.today) <= 0)),
-    ];
-    const paidCuts = new Set<string>();
-    if (pastCuts.length > 0) {
-      await this.statements.sync(userId, card.id);
-      const statements = await this.prisma.cardStatement.findMany({
-        where: {
-          userId,
-          creditCardId: card.id,
-          cutDate: { in: pastCuts },
-          paidAmount: { gt: 0 },
-        },
-        select: { cutDate: true },
-      });
-      for (const statement of statements) {
-        paidCuts.add(statement.cutDate);
-      }
-    }
+    const paidCuts = await this.paidStatementCuts(userId, card.id, cutDates, dateContext.today);
 
     return dto.rows.map((row, index) => {
       const ids = available.get(duplicateKey(row.purchaseDate, row.amount, row.description));
@@ -985,6 +967,34 @@ export class PurchasesService {
   }
 
   /**
+   * RN-30 y RN-31: de las fechas de corte indicadas, las que ya ocurrieron
+   * (`<= hoy`) y tienen pagos aplicados. Sincroniza antes de consultar: los
+   * anticipos del ciclo abierto se adoptan aqui, para que el bloqueo y la
+   * vista previa vean los pagos reales del corte.
+   */
+  private async paidStatementCuts(
+    userId: string,
+    creditCardId: string,
+    cutDates: string[],
+    today: string,
+  ): Promise<Set<string>> {
+    const pastCuts = [...new Set(cutDates.filter((cut) => compareLocalDates(cut, today) <= 0))];
+    const paid = new Set<string>();
+    if (pastCuts.length === 0) {
+      return paid;
+    }
+    await this.statements.sync(userId, creditCardId);
+    const statements = await this.prisma.cardStatement.findMany({
+      where: { userId, creditCardId, cutDate: { in: pastCuts }, paidAmount: { gt: 0 } },
+      select: { cutDate: true },
+    });
+    for (const statement of statements) {
+      paid.add(statement.cutDate);
+    }
+    return paid;
+  }
+
+  /**
    * RN-30: una compra pertenece al corte en el que cayo su cargo. Si ese
    * corte ya tiene pagos aplicados no se puede cancelar ni eliminar; el
    * bloqueo se levanta al revertir el pago. Las mensualidades marcadas como
@@ -1031,14 +1041,8 @@ export class PurchasesService {
       return; // El corte aun no ocurre: la deuda vive en el ciclo abierto.
     }
 
-    // Materializa los cortes ya ocurridos: los anticipos del ciclo abierto se
-    // adoptan aqui, para que el bloqueo vea los pagos reales del corte.
-    await this.statements.sync(userId, card.id);
-    const statement = await this.prisma.cardStatement.findFirst({
-      where: { userId, creditCardId: card.id, cutDate },
-      select: { paidAmount: true },
-    });
-    if (statement && statement.paidAmount > 0) {
+    const paid = await this.paidStatementCuts(userId, card.id, [cutDate], today);
+    if (paid.has(cutDate)) {
       throw new UnprocessableEntityError(
         'El corte de esta compra ya tiene pagos aplicados. Revierte el pago del corte o corrige con un ajuste o una conciliacion.',
         { reason: 'PURCHASE_STATEMENT_PAID' },
