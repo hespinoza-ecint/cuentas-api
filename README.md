@@ -192,6 +192,8 @@ cuentas-api/
 | GET/POST | `/api/v1/purchases` | Compras regulares, MSI y diferidas |
 | GET | `/api/v1/purchases/:id` | Detalle con plan de mensualidades |
 | POST | `/api/v1/purchases/:id/cancel` | Cancelación o devolución sin pagos |
+| POST | `/api/v1/purchases/import/preview` | Vista previa de importación desde Excel (duplicados, corte pagado y fechas) |
+| POST | `/api/v1/purchases/import` | Importa el lote desde Excel en una sola transacción (RN-31) |
 | GET | `/api/v1/installment-plans/:id` | Plan de mensualidades |
 | POST | `/api/v1/installment-plans/:id/prepay` | Anticipo o liquidación del plan |
 | POST | `/api/v1/recommendations` | Recomendación de tarjeta (o efectivo) con explicaciones |
@@ -241,6 +243,7 @@ cuentas-api/
 - [Fase 27 — Intereses e IVA de compras diferidas en el libro (RN-20)](docs/fase-27-intereses-en-el-libro.md)
 - [Fase 28 — Menores: cursores, proxy, purga y reversos fechados](docs/fase-28-menores.md)
 - [Fase 30 — Compras de un corte pagado: no se cancelan ni se eliminan (RN-30)](docs/fase-30-compras-corte-pagado.md)
+- [Fase 31 — Importar compras desde Excel (RN-31)](docs/fase-31-importar-compras.md)
 
 ## Documentación técnica completa
 

@@ -2773,6 +2773,71 @@
         ]
       }
     },
+    "/api/v1/purchases/import/preview": {
+      "post": {
+        "operationId": "PurchasesController_previewImport",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportPurchasesDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "purchases"
+        ]
+      }
+    },
+    "/api/v1/purchases/import": {
+      "post": {
+        "operationId": "PurchasesController_importPurchases",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportPurchasesDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "purchases"
+        ]
+      }
+    },
     "/api/v1/purchases/{id}": {
       "get": {
         "operationId": "PurchasesController_get",
@@ -4836,6 +4901,49 @@
           "amount",
           "purchaseDate",
           "type"
+        ]
+      },
+      "ImportPurchaseRowDto": {
+        "type": "object",
+        "properties": {
+          "purchaseDate": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "amount": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 2147483647
+          }
+        },
+        "required": [
+          "purchaseDate",
+          "description",
+          "amount"
+        ]
+      },
+      "ImportPurchasesDto": {
+        "type": "object",
+        "properties": {
+          "creditCardId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "rows": {
+            "minItems": 1,
+            "maxItems": 500,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportPurchaseRowDto"
+            }
+          }
+        },
+        "required": [
+          "creditCardId",
+          "rows"
         ]
       },
       "CancelPurchaseDto": {

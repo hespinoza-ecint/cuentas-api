@@ -1224,7 +1224,7 @@ Los días que no existen en un mes se ajustan al último día. Las fechas se aju
 
 # 7. Reglas de Negocio
 
-## 7.1 Reglas formales RN-01 a RN-30 (todas implementadas)
+## 7.1 Reglas formales RN-01 a RN-31 (todas implementadas)
 
 | ID | Regla | Dónde vive |
 |---|---|---|
@@ -1258,6 +1258,7 @@ Los días que no existen en un mes se ajustan al último día. Las fechas se aju
 | RN-28 | Reiniciar una tarjeta borra su dominio completo y la deja con saldo 0 y crédito completo; eliminarla borra además la tarjeta y los recurrentes ligados a ella. Los movimientos de efectivo de pagos no se tocan | `CardsService.reset` / `CardsService.remove` (`purgeDomain`, auditorías `credit_card.reset` / `credit_card.deleted`) |
 | RN-29 | La proyección de flujo usa una **ventana de fechas** (`from`/`to`): por defecto hoy → hoy + 30 días, `from` no puede ser anterior a hoy, máximo 5 años; lo anterior a `from` mueve el saldo inicial y lo posterior a `to` se recorta | `CashflowContextService.resolveWindow` + `CashflowService.projection` |
 | RN-30 | Una compra de un corte ya pagado no se puede cancelar ni eliminar; al revertir el pago vuelve a estarlo. Con plan bloquea cualquier pago aplicado a una mensualidad (las pagadas fuera de la app no cuentan); en regulares bloquea el corte del cargo, y el sincronizado previo materializa los cortes y adopta los anticipos del ciclo abierto | `PurchasesService.assertPurchaseUnlocked` (`422 PURCHASE_STATEMENT_PAID` / `422 PLAN_HAS_PAYMENTS`); pista `lockedReason` en las respuestas de compras |
+| RN-31 | Importar compras desde Excel: las filas se crean como compras REGULAR en una sola transaccion (fechadas en su dia, con su cargo en el corte); antes de escribir valida las fechas de todo el lote (RN-06/RN-07); los duplicados (misma fecha, monto y descripcion normalizada, conteo por cantidad) y los cortes pagados (RN-30) se avisan en la vista previa y decide el usuario | `PurchasesService.previewImport` / `importPurchases` (`422 FUTURE_DATE_NOT_ALLOWED` / `422 BACKDATE_LIMIT_EXCEEDED` con `rowIndex`); `createRegularInTx` con auditoria `origin: "IMPORT"` |
 
 | Recurrente con tarjeta se confirma como compra | `paymentMethod = CREDIT_CARD` crea `Purchase` REGULAR + entrada `PURCHASE`; efectivo crea `Expense` + movimiento | `PAYMENT_METHOD_REQUIRED`, `CREDIT_CARD_REQUIRED`, `CARD_NOT_FOUND`, `CARD_INACTIVE` |
 | Una ocurrencia se confirma una sola vez | Único `(recurringExpenseId, occurrenceDate)` en Expense y Purchase | `OCCURRENCE_ALREADY_CONFIRMED` |
@@ -1953,6 +1954,8 @@ Errores: `422 PAYMENT_EXCEEDS_BALANCE`, `422 CARD_WITHOUT_BALANCE`, `422 CARD_IN
 | POST | `/purchases` | Registra compra (regular/MSI/diferida) — **@Idempotent** |
 | GET | `/purchases/:id` | Detalle |
 | POST | `/purchases/:id/cancel` | Cancelación/devolución (solo sin pagos) |
+| POST | `/purchases/import/preview` | Vista previa de importación desde Excel: duplicados, corte pagado y fechas (RN-31) |
+| POST | `/purchases/import` | Importa un lote de 1..500 filas en una transacción — **@Idempotent** (RN-31) |
 | DELETE | `/purchases/:id` | Eliminar compra (regular, MSI o diferida) solo si su corte no tiene pagos aplicados (RN-27 y RN-30) |
 | GET | `/installment-plans/:id` | Plan + mensualidades |
 | POST | `/installment-plans/:id/prepay` | Anticipo/liquidación — **@Idempotent** |
@@ -2006,6 +2009,10 @@ Los pagos y movimientos de efectivo ya hechos no se modifican; los estados de cu
 { "deleted": true, "refundedPrincipal": 60000, "paidAmount": 30000 }
 ```
 Errores: `404 PURCHASE_NOT_FOUND` (también si es de otro usuario), `422 PURCHASE_STATEMENT_PAID` / `422 PLAN_HAS_PAYMENTS` (RN-30; se liberan al revertir el pago).
+
+**POST /purchases/import/preview → 200** · `{ "creditCardId": "uuid", "rows": [ { "purchaseDate": "2026-10-04", "description": "UBER *TRIP", "amount": 8997 }, { "purchaseDate": "2026-10-03", "description": "OXXO", "amount": 4450 } ] }` → `{ "data": [ { "index": 0, "duplicateOfId": "uuid-o-null", "statementPaid": false, "dateIssue": null }, { "index": 1, "duplicateOfId": null, "statementPaid": true, "dateIssue": null } ] }` (mismo orden que `rows`). `duplicateOfId` apunta a una compra existente de esa tarjeta con la misma fecha, monto y descripción normalizada (sin mayúsculas ni espacios de más; una compra existente marca cuando mucho una fila); `statementPaid` avisa que el corte de esa fecha ya tiene pagos (RN-30); `dateIssue` vale `"FUTURE_DATE_NOT_ALLOWED"` o `"BACKDATE_LIMIT_EXCEEDED"` (RN-06/RN-07) cuando la fila no se podría registrar. Solo lectura: no crea nada. Errores: `404 CARD_NOT_FOUND`, `400` de validación (1..500 filas).
+
+**POST /purchases/import → 201** · `{ "creditCardId": "uuid", "rows": [ ... ] }` → `{ "createdCount": 2, "purchaseIds": ["uuid", "uuid"] }`. Crea cada fila como compra REGULAR con su cargo en el libro fechado ese día (cae en su corte) y auditoría `purchase.created` con `origin: "IMPORT"`, todo en una sola transacción: valida las fechas de todo el lote antes de escribir y, si una falla, responde `422 FUTURE_DATE_NOT_ALLOWED` / `422 BACKDATE_LIMIT_EXCEEDED` con `rowIndex` sin crear nada. Acepta `Idempotency-Key`. Errores: `404 CARD_NOT_FOUND`, `422 CARD_INACTIVE`, `400` de validación.
 
 **GET /installment-plans/:id → 200**
 ```json
@@ -4946,6 +4953,71 @@ Tipos de evento: `INCOME`, `RECURRING_EXPENSE`, `CARD_STATEMENT`, `INSTALLMENT`,
         ]
       }
     },
+    "/api/v1/purchases/import/preview": {
+      "post": {
+        "operationId": "PurchasesController_previewImport",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportPurchasesDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "purchases"
+        ]
+      }
+    },
+    "/api/v1/purchases/import": {
+      "post": {
+        "operationId": "PurchasesController_importPurchases",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportPurchasesDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "purchases"
+        ]
+      }
+    },
     "/api/v1/purchases/{id}": {
       "get": {
         "operationId": "PurchasesController_get",
@@ -7009,6 +7081,49 @@ Tipos de evento: `INCOME`, `RECURRING_EXPENSE`, `CARD_STATEMENT`, `INSTALLMENT`,
           "amount",
           "purchaseDate",
           "type"
+        ]
+      },
+      "ImportPurchaseRowDto": {
+        "type": "object",
+        "properties": {
+          "purchaseDate": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "amount": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 2147483647
+          }
+        },
+        "required": [
+          "purchaseDate",
+          "description",
+          "amount"
+        ]
+      },
+      "ImportPurchasesDto": {
+        "type": "object",
+        "properties": {
+          "creditCardId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "rows": {
+            "minItems": 1,
+            "maxItems": 500,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportPurchaseRowDto"
+            }
+          }
+        },
+        "required": [
+          "creditCardId",
+          "rows"
         ]
       },
       "CancelPurchaseDto": {
