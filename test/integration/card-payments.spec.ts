@@ -157,10 +157,14 @@ describe('Pagos de tarjeta (integracion)', () => {
   });
 
   it('aplica al saldo revolvente cuando aun no hay cortes', async () => {
+    // Reloj fijo: con cutDay 15, un "hoy" que sea el mismo dia 15 haria que el
+    // cargo del saldo inicial ya tenga corte y el pago se aplicaria al estado
+    // de cuenta en lugar del revolvente.
+    travelTo('2026-10-10');
     const user = await createVerifiedUser(app, 'card-payment-revolving');
     const account = await createCashAccount(app, user.accessToken, { openingBalance: 500000 });
     const card = await createCard(app, user.accessToken, { openingBalance: 300000 });
-    const today = todayInTimeZone('America/Mexico_City');
+    const today = '2026-10-10';
 
     const response = await request(app.getHttpServer())
       .post('/api/v1/card-payments')
