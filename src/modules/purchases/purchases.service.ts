@@ -30,11 +30,12 @@ import { CategoriesService } from '../categories/categories.service';
 import { HolidayCalendarService } from '../holidays/holiday-calendar.service';
 import { InstallmentsService } from '../installments/installments.service';
 import { LedgerService } from '../ledger/ledger.service';
-import { FinancialDatePolicy } from '../ledger/financial-date.policy';
+import { FinancialDatePolicy, LocalDateIssue } from '../ledger/financial-date.policy';
 import {
   CancelPurchaseDto,
   CreatePurchaseDto,
   DeletePurchaseDto,
+  ImportPurchasesDto,
   ListPurchasesQueryDto,
   PrepayPlanDto,
 } from './dto/purchase.dto';
@@ -62,6 +63,25 @@ export interface DeletePurchaseResult {
   refundedPrincipal: number;
   /** Pagos y anticipos ya aplicados a las mensualidades desde la app. */
   paidAmount: number;
+}
+
+/** RN-31: aviso de una fila candidata a importarse. */
+export interface ImportPreviewRow {
+  index: number;
+  duplicateOfId: string | null;
+  statementPaid: boolean;
+  dateIssue: LocalDateIssue;
+}
+
+export interface ImportPurchasesResult {
+  createdCount: number;
+  purchaseIds: string[];
+}
+
+/** RN-31: clave de duplicado (sin mayusculas y con espacios colapsados). */
+function duplicateKey(purchaseDate: string, amount: number, description: string): string {
+  const normalized = description.trim().replace(/\s+/g, ' ').toLowerCase();
+  return `${purchaseDate}|${amount}|${normalized}`;
 }
 
 export interface PurchaseOriginOptions {
@@ -419,6 +439,61 @@ export class PurchasesService {
   }
 
   /** RN-26: cancelar o devolver una compra se registra con un reverso. */
+  /**
+   * RN-31: vista previa de una importacion. No escribe nada: avisa que filas
+   * ya existen (por cantidad), cuales caen en un corte con pagos y que fechas
+   * no pasarian la politica (RN-06/RN-07).
+   */
+  async previewImport(userId: string, dto: ImportPurchasesDto): Promise<ImportPreviewRow[]> {
+    const card = await this.cardsService.get(userId, dto.creditCardId);
+
+    const existing = await this.prisma.purchase.findMany({
+      where: { userId, creditCardId: card.id },
+      select: { id: true, purchaseDate: true, amount: true, description: true },
+    });
+    const available = new Map<string, string[]>();
+    for (const purchase of existing) {
+      const key = duplicateKey(purchase.purchaseDate, purchase.amount, purchase.description);
+      const ids = available.get(key) ?? [];
+      ids.push(purchase.id);
+      available.set(key, ids);
+    }
+
+    const dateContext = await this.datePolicy.context(userId);
+    const cutDates = dto.rows.map((row) =>
+      cutDateForPurchase(card.cutDay, row.purchaseDate, card.sameDayCutIncluded),
+    );
+    const pastCuts = [
+      ...new Set(cutDates.filter((cut) => compareLocalDates(cut, dateContext.today) <= 0)),
+    ];
+    const paidCuts = new Set<string>();
+    if (pastCuts.length > 0) {
+      await this.statements.sync(userId, card.id);
+      const statements = await this.prisma.cardStatement.findMany({
+        where: {
+          userId,
+          creditCardId: card.id,
+          cutDate: { in: pastCuts },
+          paidAmount: { gt: 0 },
+        },
+        select: { cutDate: true },
+      });
+      for (const statement of statements) {
+        paidCuts.add(statement.cutDate);
+      }
+    }
+
+    return dto.rows.map((row, index) => {
+      const ids = available.get(duplicateKey(row.purchaseDate, row.amount, row.description));
+      return {
+        index,
+        duplicateOfId: ids && ids.length > 0 ? (ids.shift() as string) : null,
+        statementPaid: paidCuts.has(cutDates[index]),
+        dateIssue: this.datePolicy.allowedIssue(row.purchaseDate, dateContext),
+      };
+    });
+  }
+
   async cancel(
     userId: string,
     id: string,

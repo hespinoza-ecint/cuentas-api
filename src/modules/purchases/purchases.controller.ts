@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
   Param,
   ParseUUIDPipe,
   Post,
@@ -20,6 +21,7 @@ import {
   CancelPurchaseDto,
   CreatePurchaseDto,
   DeletePurchaseDto,
+  ImportPurchasesDto,
   ListPurchasesQueryDto,
 } from './dto/purchase.dto';
 import { PurchasesService } from './purchases.service';
@@ -44,6 +46,13 @@ export class PurchasesController {
     @Req() request: FastifyRequest,
   ) {
     return this.purchasesService.create(user.id, dto, requestMeta(request));
+  }
+
+  /** RN-31: vista previa de una importacion (solo lectura). */
+  @Post('import/preview')
+  @HttpCode(200)
+  previewImport(@CurrentUser() user: AuthenticatedUser, @Body() dto: ImportPurchasesDto) {
+    return this.purchasesService.previewImport(user.id, dto).then((rows) => ({ data: rows }));
   }
 
   @Get(':id')

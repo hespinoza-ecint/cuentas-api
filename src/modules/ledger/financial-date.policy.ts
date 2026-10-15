@@ -4,6 +4,9 @@ import { compareLocalDates, daysBetween } from '../../domain/shared/local-date';
 import { ClockService } from '../../infrastructure/clock/clock.module';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 
+/** RN-31: motivo por el que una fecha no pasaria la politica (o null). */
+export type LocalDateIssue = 'FUTURE_DATE_NOT_ALLOWED' | 'BACKDATE_LIMIT_EXCEEDED' | null;
+
 /**
  * Politica de fechas para cualquier registro financiero (efectivo o tarjeta):
  * - No se permiten fechas futuras (RN-07).
@@ -42,6 +45,25 @@ export class FinancialDatePolicy {
   async assertNotFuture(userId: string, occurredOn: string): Promise<void> {
     const { today } = await this.userContext(userId);
     this.assertNotFutureDate(occurredOn, today);
+  }
+
+  /** Contexto de fechas del usuario: hoy en su zona y limite hacia atras. */
+  async context(userId: string): Promise<{ today: string; backdateLimit: number }> {
+    return this.userContext(userId);
+  }
+
+  /** RN-31: motivo por el que una fecha no seria aceptada, sin lanzar error. */
+  allowedIssue(
+    occurredOn: string,
+    context: { today: string; backdateLimit: number },
+  ): LocalDateIssue {
+    if (compareLocalDates(occurredOn, context.today) > 0) {
+      return 'FUTURE_DATE_NOT_ALLOWED';
+    }
+    if (daysBetween(occurredOn, context.today) > context.backdateLimit) {
+      return 'BACKDATE_LIMIT_EXCEEDED';
+    }
+    return null;
   }
 
   private async userContext(

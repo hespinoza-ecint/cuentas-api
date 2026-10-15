@@ -1,5 +1,8 @@
 import { Transform, Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
+  IsArray,
   IsIn,
   IsInt,
   IsNotEmpty,
@@ -10,6 +13,7 @@ import {
   Max,
   MaxLength,
   Min,
+  ValidateNested,
 } from 'class-validator';
 import { IsLocalDate } from '../../../common/validation/is-local-date.decorator';
 import { trim } from '../../../common/validation/transforms';
@@ -133,6 +137,36 @@ export class DeletePurchaseDto {
   @IsNotEmpty({ message: 'reason es obligatorio' })
   @MaxLength(300, { message: 'reason no debe exceder 300 caracteres' })
   reason!: string;
+}
+
+/** RN-31: fila de un estado de cuenta importado desde Excel. */
+export class ImportPurchaseRowDto {
+  @IsLocalDate({ message: 'purchaseDate debe ser una fecha valida YYYY-MM-DD' })
+  purchaseDate!: string;
+
+  @Transform(trim)
+  @IsString({ message: 'description debe ser texto' })
+  @IsNotEmpty({ message: 'description es obligatoria' })
+  @MaxLength(200, { message: 'description no debe exceder 200 caracteres' })
+  description!: string;
+
+  @IsInt({ message: 'amount debe ser un entero en centavos' })
+  @Min(1, { message: 'amount debe ser mayor que cero' })
+  @Max(MAX_MONEY, { message: 'amount excede el maximo permitido' })
+  amount!: number;
+}
+
+/** RN-31: lote de filas a importar en una sola tarjeta. */
+export class ImportPurchasesDto {
+  @IsUUID('4', { message: 'creditCardId debe ser un UUID' })
+  creditCardId!: string;
+
+  @IsArray({ message: 'rows debe ser un arreglo' })
+  @ArrayMinSize(1, { message: 'Debes indicar al menos una fila' })
+  @ArrayMaxSize(500, { message: 'rows no debe exceder 500 filas' })
+  @ValidateNested({ each: true })
+  @Type(() => ImportPurchaseRowDto)
+  rows!: ImportPurchaseRowDto[];
 }
 
 export class PrepayPlanDto {
