@@ -55,6 +55,18 @@ export class PurchasesController {
     return this.purchasesService.previewImport(user.id, dto).then((rows) => ({ data: rows }));
   }
 
+  /** RN-31: importa el lote completo en una sola transaccion. */
+  @Post('import')
+  @RequireVerifiedEmail()
+  @Idempotent()
+  importPurchases(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: ImportPurchasesDto,
+    @Req() request: FastifyRequest,
+  ) {
+    return this.purchasesService.importPurchases(user.id, dto, requestMeta(request));
+  }
+
   @Get(':id')
   get(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseUUIDPipe) id: string) {
     return this.purchasesService.get(user.id, id);

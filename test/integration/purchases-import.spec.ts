@@ -161,4 +161,137 @@ describe('Importacion de compras desde Excel (RN-31)', () => {
     }));
     await preview(user, { creditCardId: userCard.id, rows }).expect(400);
   });
+
+  function importRows(user: TestUser, body: Record<string, unknown>, idempotencyKey?: string) {
+    const call = request(app.getHttpServer())
+      .post('/api/v1/purchases/import')
+      .set(...authHeader(user.accessToken));
+    if (idempotencyKey) {
+      call.set('Idempotency-Key', idempotencyKey);
+    }
+    return call.send(body);
+  }
+
+  it('importa todas las filas en una transaccion y ocupa credito en su corte', async () => {
+    const user = await createVerifiedUser(app, 'import-create');
+    travelTo('2026-10-20');
+    const card = await createCard(app, user.accessToken, {
+      creditLimit: 3000000,
+      cutDay: 15,
+    });
+
+    const response = await importRows(user, {
+      creditCardId: card.id,
+      rows: [
+        { purchaseDate: '2026-10-04', description: 'Uber', amount: 8997 },
+        { purchaseDate: '2026-10-03', description: 'Oxxo', amount: 4450 },
+      ],
+    }).expect(201);
+
+    expect(response.body.createdCount).toBe(2);
+    expect(response.body.purchaseIds).toHaveLength(2);
+
+    const list = await request(app.getHttpServer())
+      .get('/api/v1/purchases')
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    const descriptions = list.body.data
+      .map((purchase: { description: string }) => purchase.description)
+      .sort();
+    expect(descriptions).toEqual(['Oxxo', 'Uber']);
+    expect(list.body.data.every((purchase: { type: string }) => purchase.type === 'REGULAR')).toBe(
+      true,
+    );
+
+    // Los dos cargos caen en el corte del 15 de octubre.
+    const statements = await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}/statements`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    const october = statements.body.find(
+      (statement: { cutDate: string }) => statement.cutDate === '2026-10-15',
+    );
+    expect(october.cycleCharges).toBe(8997 + 4450);
+
+    const cardAfter = await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(cardAfter.body.currentBalance).toBe(8997 + 4450);
+  });
+
+  it('no crea nada si una fila tiene fecha fuera de rango', async () => {
+    const user = await createVerifiedUser(app, 'import-atomic');
+    travelTo('2026-10-20');
+    const card = await createCard(app, user.accessToken, {
+      creditLimit: 3000000,
+      cutDay: 15,
+    });
+
+    const response = await importRows(user, {
+      creditCardId: card.id,
+      rows: [
+        { purchaseDate: '2026-10-04', description: 'Valida', amount: 1000 },
+        { purchaseDate: '2026-10-21', description: 'Futura', amount: 2000 },
+      ],
+    }).expect(422);
+
+    expect(response.body.reason).toBe('FUTURE_DATE_NOT_ALLOWED');
+    expect(response.body.rowIndex).toBe(1);
+
+    const list = await request(app.getHttpServer())
+      .get('/api/v1/purchases')
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(list.body.data).toHaveLength(0);
+
+    const cardAfter = await request(app.getHttpServer())
+      .get(`/api/v1/cards/${card.id}`)
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(cardAfter.body.currentBalance).toBe(0);
+  });
+
+  it('rechaza una tarjeta inactiva', async () => {
+    const user = await createVerifiedUser(app, 'import-inactive');
+    travelTo('2026-10-20');
+    const card = await createCard(app, user.accessToken, { cutDay: 15 });
+    await request(app.getHttpServer())
+      .patch(`/api/v1/cards/${card.id}`)
+      .set(...authHeader(user.accessToken))
+      .send({ status: 'INACTIVE' })
+      .expect(200);
+
+    const response = await importRows(user, {
+      creditCardId: card.id,
+      rows: [{ purchaseDate: '2026-10-04', description: 'Uber', amount: 8997 }],
+    }).expect(422);
+
+    expect(response.body.reason).toBe('CARD_INACTIVE');
+  });
+
+  it('es idempotente con la misma llave', async () => {
+    const user = await createVerifiedUser(app, 'import-idempotent');
+    travelTo('2026-10-20');
+    const card = await createCard(app, user.accessToken, {
+      creditLimit: 3000000,
+      cutDay: 15,
+    });
+    const body = {
+      creditCardId: card.id,
+      rows: [{ purchaseDate: '2026-10-04', description: 'Uber', amount: 8997 }],
+    };
+    const key = 'import-e2e-1234567890';
+
+    const first = await importRows(user, body, key).expect(201);
+    const second = await importRows(user, body, key).expect(201);
+
+    expect(second.body).toEqual(first.body);
+
+    const list = await request(app.getHttpServer())
+      .get('/api/v1/purchases')
+      .set(...authHeader(user.accessToken))
+      .expect(200);
+    expect(list.body.data).toHaveLength(1);
+  });
 });

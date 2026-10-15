@@ -20,7 +20,7 @@ import {
   outstandingPrincipalOf,
 } from '../../domain/installments/amortization';
 import { addDays, compareLocalDates } from '../../domain/shared/local-date';
-import { Prisma } from '@prisma/client';
+import { Prisma, Purchase } from '@prisma/client';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { CardLedgerService } from '../card-ledger/card-ledger.service';
@@ -182,17 +182,16 @@ export class PurchasesService {
     }
 
     if (dto.type === 'REGULAR') {
-      const purchase = await this.prisma.$transaction(async (tx) => {
-        const created = await this.purchases.create(
+      const purchaseId = await this.prisma.$transaction(async (tx) => {
+        const created = await this.createRegularInTx(
+          tx,
+          userId,
+          card.id,
           {
-            userId,
-            creditCardId: card.id,
-            categoryId: dto.categoryId,
             description: dto.description,
             amount: dto.amount,
             purchaseDate: dto.purchaseDate,
-            type: 'REGULAR',
-            status: 'ACTIVE',
+            categoryId: dto.categoryId,
             notes: dto.notes,
             recommendationId: dto.recommendationId,
             ...(origin?.recurringExpenseId
@@ -202,46 +201,12 @@ export class PurchasesService {
                 }
               : {}),
           },
-          tx,
+          meta,
         );
-
-        await this.cardLedger.postEntry(
-          {
-            userId,
-            creditCardId: card.id,
-            type: 'PURCHASE',
-            amount: dto.amount,
-            occurredOn: dto.purchaseDate,
-            description: dto.description,
-            sourceType: 'Purchase',
-            sourceId: created.id,
-            createdById: userId,
-          },
-          tx,
-        );
-
-        await this.audit.record(
-          {
-            action: 'purchase.created',
-            entityType: 'Purchase',
-            entityId: created.id,
-            userId,
-            actorUserId: userId,
-            changes: {
-              creditCardId: card.id,
-              type: 'REGULAR',
-              amount: dto.amount,
-              purchaseDate: dto.purchaseDate,
-            },
-            ...meta,
-          },
-          tx,
-        );
-
-        return created;
+        return created.id;
       });
 
-      return this.get(userId, purchase.id);
+      return this.get(userId, purchaseId);
     }
 
     if (!dto.months) {
@@ -439,6 +404,83 @@ export class PurchasesService {
   }
 
   /** RN-26: cancelar o devolver una compra se registra con un reverso. */
+  /** Extrae la rama regular de `create` para reutilizarla en la importacion. */
+  private async createRegularInTx(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    creditCardId: string,
+    input: {
+      description: string;
+      amount: number;
+      purchaseDate: string;
+      categoryId?: string;
+      notes?: string;
+      recommendationId?: string;
+      recurringExpenseId?: string;
+      occurrenceDate?: string;
+    },
+    meta: RequestMeta,
+    auditOrigin?: 'IMPORT',
+  ): Promise<Purchase> {
+    const created = await this.purchases.create(
+      {
+        userId,
+        creditCardId,
+        categoryId: input.categoryId,
+        description: input.description,
+        amount: input.amount,
+        purchaseDate: input.purchaseDate,
+        type: 'REGULAR',
+        status: 'ACTIVE',
+        notes: input.notes,
+        recommendationId: input.recommendationId,
+        ...(input.recurringExpenseId
+          ? {
+              recurringExpenseId: input.recurringExpenseId,
+              occurrenceDate: input.occurrenceDate,
+            }
+          : {}),
+      },
+      tx,
+    );
+
+    await this.cardLedger.postEntry(
+      {
+        userId,
+        creditCardId,
+        type: 'PURCHASE',
+        amount: input.amount,
+        occurredOn: input.purchaseDate,
+        description: input.description,
+        sourceType: 'Purchase',
+        sourceId: created.id,
+        createdById: userId,
+      },
+      tx,
+    );
+
+    await this.audit.record(
+      {
+        action: 'purchase.created',
+        entityType: 'Purchase',
+        entityId: created.id,
+        userId,
+        actorUserId: userId,
+        changes: {
+          creditCardId,
+          type: 'REGULAR',
+          amount: input.amount,
+          purchaseDate: input.purchaseDate,
+          ...(auditOrigin ? { origin: auditOrigin } : {}),
+        },
+        ...meta,
+      },
+      tx,
+    );
+
+    return created;
+  }
+
   /**
    * RN-31: vista previa de una importacion. No escribe nada: avisa que filas
    * ya existen (por cantidad), cuales caen en un corte con pagos y que fechas
@@ -492,6 +534,58 @@ export class PurchasesService {
         dateIssue: this.datePolicy.allowedIssue(row.purchaseDate, dateContext),
       };
     });
+  }
+
+  /**
+   * RN-31: crea todas las filas en una sola transaccion. Valida las fechas de
+   * todo el lote antes de escribir; si una falla no se crea nada.
+   */
+  async importPurchases(
+    userId: string,
+    dto: ImportPurchasesDto,
+    meta: RequestMeta,
+  ): Promise<ImportPurchasesResult> {
+    const card = await this.cardsService.get(userId, dto.creditCardId);
+    if (card.status !== 'ACTIVE') {
+      throw new UnprocessableEntityError('La tarjeta esta inactiva.', {
+        reason: 'CARD_INACTIVE',
+      });
+    }
+
+    const dateContext = await this.datePolicy.context(userId);
+    for (const [index, row] of dto.rows.entries()) {
+      const issue = this.datePolicy.allowedIssue(row.purchaseDate, dateContext);
+      if (issue) {
+        throw new UnprocessableEntityError(
+          issue === 'FUTURE_DATE_NOT_ALLOWED'
+            ? 'No se pueden registrar movimientos con fecha futura. Los flujos futuros se capturan como ingresos o gastos programados.'
+            : `La fecha excede el limite de ${dateContext.backdateLimit} dias hacia atras.`,
+          { reason: issue, rowIndex: index },
+        );
+      }
+    }
+
+    const purchaseIds = await this.prisma.$transaction(async (tx) => {
+      const created: string[] = [];
+      for (const row of dto.rows) {
+        const purchase = await this.createRegularInTx(
+          tx,
+          userId,
+          card.id,
+          {
+            description: row.description,
+            amount: row.amount,
+            purchaseDate: row.purchaseDate,
+          },
+          meta,
+          'IMPORT',
+        );
+        created.push(purchase.id);
+      }
+      return created;
+    });
+
+    return { createdCount: purchaseIds.length, purchaseIds };
   }
 
   async cancel(
