@@ -4,12 +4,10 @@ import { testDatabaseUrl } from './test-db';
  * Configuracion de entorno para las pruebas. Se ejecuta antes de importar
  * cualquier modulo de la aplicacion, por lo que `process.env` gana sobre `.env`.
  *
- * Cada worker de Jest usa una base distinta (SQLite o MySQL segun TEST_MYSQL_URL).
+ * Todas las suites comparten la base MySQL Cuentas_Test (no SQLite).
  */
-const workerId = process.env.JEST_WORKER_ID ?? '1';
-
 process.env.NODE_ENV = 'test';
-process.env.DATABASE_URL = testDatabaseUrl(workerId);
+process.env.DATABASE_URL = testDatabaseUrl();
 process.env.LOG_LEVEL = 'silent';
 process.env.DOCS_ENABLED = 'true';
 process.env.APP_VERSION = '0.0.0-test';

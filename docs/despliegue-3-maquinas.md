@@ -28,8 +28,8 @@ sudo apt update && sudo apt install -y mysql-server
 sudo mysql_secure_installation
 ```
 
-Crear base, usuario de la API y usuario de pruebas (este último solo si vas a
-correr `npm run test:mysql` desde el servidor de la API):
+Crear base, usuario de la API y base/usuario de pruebas (este último solo si vas a
+correr `npm test` desde el servidor de la API):
 
 ```sql
 CREATE DATABASE cuentas CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -37,8 +37,9 @@ CREATE DATABASE cuentas CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER 'cuentas'@'10.0.0.20' IDENTIFIED BY 'CONTRASENA_FUERTE';
 GRANT ALL PRIVILEGES ON cuentas.* TO 'cuentas'@'10.0.0.20';
 
+CREATE DATABASE `Cuentas_Test` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER 'cuentas_test'@'10.0.0.20' IDENTIFIED BY 'OTRA_CONTRASENA';
-GRANT ALL PRIVILEGES ON `cuentas\_test\_%`.* TO 'cuentas_test'@'10.0.0.20';
+GRANT ALL PRIVILEGES ON `Cuentas_Test`.* TO 'cuentas_test'@'10.0.0.20';
 
 FLUSH PRIVILEGES;
 ```
@@ -115,8 +116,8 @@ sudo -u cuentas npm run db:seed
 ```
 
 > **Importante:** el cliente de Prisma se genera por proveedor. En esta máquina
-> usa siempre `npm run mysql:generate`; si algún día corres las pruebas SQLite
-> (`npm test`), el setup vuelve a generar el cliente SQLite automáticamente.
+> usa siempre `npm run mysql:generate`. Las pruebas (`npm test`) regeneran el
+> cliente MySQL automáticamente y resetean la base `Cuentas_Test`.
 
 ### 2.5 Servicio systemd
 
@@ -142,11 +143,14 @@ curl http://localhost:3000/health     # {"status":"ok", checks.database.status:"
 
 ### 2.6 (Opcional) Validar con la suite MySQL
 
+Con `DATABASE_URL` apuntando al servidor y la base de pruebas `Cuentas_Test`
+creada y accesible:
+
 ```bash
-npm run test:mysql -- mysql://cuentas_test:OTRA_CONTRASENA@10.0.0.30:3306
+npm test
 ```
 
-Crea bases `cuentas_test_1..N`, corre las 38 suites contra MySQL y las elimina.
+Resetea `Cuentas_Test` (esquema + seed), corre todas las suites y deja la base lista.
 
 ---
 

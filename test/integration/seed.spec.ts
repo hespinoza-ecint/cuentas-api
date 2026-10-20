@@ -48,15 +48,4 @@ describe('Datos iniciales (seed)', () => {
     const parentKeys = parents.map((category) => `${category.name}|${category.kind}`);
     expect(new Set(parentKeys).size).toBe(parentKeys.length);
   });
-
-  it('SQLite trabaja en modo WAL', async () => {
-    if (!(process.env.DATABASE_URL ?? '').startsWith('file:')) {
-      return;
-    }
-
-    const rows = await prisma.$queryRawUnsafe<Array<{ journal_mode: string }>>(
-      'PRAGMA journal_mode;',
-    );
-    expect(rows[0]?.journal_mode).toBe('wal');
-  });
 });

@@ -17,7 +17,7 @@ Dejar el backend listo para operar: prueba end-to-end de todo el ciclo, idempote
 | RN-24 | La anualidad se proyecta como obligación futura en el motor de recomendaciones |
 | Despliegue | `Dockerfile`, `docker-compose.yml` (volumen persistente), `ecosystem.config.js` (PM2) y `.env.production.example` |
 | Respaldos | `npm run db:backup`: checkpoint WAL + `VACUUM INTO` con rotación (`BACKUP_RETENTION`) |
-| MySQL | `npm run mysql:schema` genera el esquema MySQL (provider + `@db.Text`), el setup de pruebas usa una base por worker y `npm run test:mysql` corre toda la suite contra MySQL |
+| MySQL | `npm run mysql:schema` genera el esquema MySQL (provider + `@db.Text`) y el setup de pruebas usa la base `Cuentas_Test`; `npm test` corre toda la suite contra MySQL |
 
 ## 3. Endpoints nuevos
 
@@ -96,8 +96,8 @@ Una sola instancia mientras se use SQLite (un solo escritor). Con MySQL se puede
 # 1) Generar el esquema MySQL
 npm run mysql:schema
 
-# 2) Correr la suite completa contra MySQL (crea cuentas_test_1..5)
-npm run test:mysql -- mysql://usuario:contrasena@127.0.0.1:3306
+# 2) Correr la suite completa contra MySQL (usa Cuentas_Test derivada de .env)
+npm test
 
 # 3) En produccion
 #    - Copiar datos con un ETL (o prisma migrate diff + script propio)

@@ -30,8 +30,7 @@
     "mysql:generate": "prisma generate --schema prisma/schema.mysql.prisma",
     "mysql:apply": "prisma db execute --schema prisma/schema.mysql.prisma --file prisma/mysql/init.sql",
     "mysql:diff": "prisma migrate diff --from-schema-datasource prisma/schema.mysql.prisma --to-schema-datamodel prisma/schema.mysql.prisma --script",
-    "openapi:3.1": "node scripts/openapi-3.1.mjs && node scripts/embed-openapi.mjs",
-    "test:mysql": "node scripts/test-mysql.mjs"
+    "openapi:3.1": "node scripts/openapi-3.1.mjs && node scripts/embed-openapi.mjs"
   },
   "prisma": {
     "seed": "tsx prisma/seed/index.ts"

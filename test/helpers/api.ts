@@ -121,8 +121,13 @@ export async function createCashAccount(
     .send({
       name: overrides.name ?? `Cuenta ${randomUUID().slice(0, 8)}`,
       ...overrides,
-    })
-    .expect(201);
+    });
+
+  if (response.status !== 201) {
+    throw new Error(
+      `POST /cash-accounts respondio ${response.status}: ${JSON.stringify(response.body)}`,
+    );
+  }
 
   return response.body as CashAccountFixture;
 }

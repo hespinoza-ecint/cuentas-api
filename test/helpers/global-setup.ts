@@ -1,15 +1,8 @@
 import { execSync } from 'node:child_process';
-import * as fs from 'node:fs';
 import * as path from 'node:path';
-import {
-  TEST_DB_POOL_SIZE,
-  isMysqlTests,
-  testDatabasePath,
-  testDatabaseUrl,
-  toDatabaseUrl,
-} from './test-db';
+import { testDatabaseUrl } from './test-db';
 
-function run(command: string, databaseUrl?: string): void {
+function run(command: string, databaseUrl: string): void {
   const projectRoot = path.resolve(__dirname, '..', '..');
 
   try {
@@ -18,7 +11,7 @@ function run(command: string, databaseUrl?: string): void {
       env: {
         ...process.env,
         NODE_ENV: 'test',
-        ...(databaseUrl ? { DATABASE_URL: databaseUrl } : {}),
+        DATABASE_URL: databaseUrl,
       },
       stdio: 'pipe',
     });
@@ -32,46 +25,23 @@ function run(command: string, databaseUrl?: string): void {
 }
 
 /**
- * Prepara el pool de bases de prueba (una por worker de Jest):
- * - SQLite: aplica migraciones y ejecuta el seed dos veces (idempotencia).
- * - MySQL: genera el esquema MySQL y usa `prisma db push` por base.
+ * Prepara la base de pruebas en MySQL (Cuentas_Test):
+ * - genera `prisma/schema.mysql.prisma` y el cliente de Prisma para MySQL;
+ * - resetea la base y aplica el esquema con `prisma db push`;
+ * - ejecuta el seed dos veces (valida idempotencia).
+ *
+ * Jest corre en paralelo contra esta unica base: MySQL soporta varias
+ * conexiones, pero dos corridas simultaneas de la suite no deben compartirla.
  */
 export default async function globalSetup(): Promise<void> {
-  if (isMysqlTests()) {
-    run('node scripts/mysql-schema.mjs');
-    // El cliente de Prisma se genera por proveedor: para MySQL hay que
-    // regenerarlo con el esquema MySQL antes de tocar la base.
-    run('npx prisma generate --schema prisma/schema.mysql.prisma');
+  const databaseUrl = testDatabaseUrl();
 
-    for (let index = 1; index <= TEST_DB_POOL_SIZE; index += 1) {
-      const databaseUrl = testDatabaseUrl(String(index));
-      run(
-        'npx prisma db push --schema prisma/schema.mysql.prisma --force-reset --accept-data-loss --skip-generate',
-        databaseUrl,
-      );
-      run('npx prisma db seed', databaseUrl);
-      run('npx prisma db seed', databaseUrl);
-    }
-    return;
-  }
-
-  // Vuelve a generar el cliente para SQLite por si la ultima corrida fue MySQL.
-  run('npx prisma generate');
-
-  const directory = path.dirname(testDatabasePath('1'));
-  fs.mkdirSync(directory, { recursive: true });
-
-  for (let index = 1; index <= TEST_DB_POOL_SIZE; index += 1) {
-    const dbPath = testDatabasePath(String(index));
-
-    for (const suffix of ['', '-wal', '-shm', '-journal']) {
-      fs.rmSync(`${dbPath}${suffix}`, { force: true });
-    }
-
-    const databaseUrl = toDatabaseUrl(dbPath);
-    run('npx prisma migrate deploy', databaseUrl);
-    // Dos veces a proposito: valida que el seed sea idempotente.
-    run('npx prisma db seed', databaseUrl);
-    run('npx prisma db seed', databaseUrl);
-  }
+  run('node scripts/mysql-schema.mjs', databaseUrl);
+  run('npx prisma generate --schema prisma/schema.mysql.prisma', databaseUrl);
+  run(
+    'npx prisma db push --schema prisma/schema.mysql.prisma --force-reset --accept-data-loss --skip-generate',
+    databaseUrl,
+  );
+  run('npx prisma db seed', databaseUrl);
+  run('npx prisma db seed', databaseUrl);
 }

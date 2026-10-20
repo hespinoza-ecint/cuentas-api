@@ -29,7 +29,7 @@ El documento de la Fase 0 (reglas de negocio RN-01 a RN-26, modelo de datos comp
 - **Node.js 24** + **TypeScript 5.9**
 - **NestJS 11** (`@nestjs/core` 11.2.7) sobre **Fastify 5.12.5**
   (fastify se fija con un `override` de npm: Nest 11 declara 5.11.3, que tiene vulnerabilidades conocidas; al migrar a Nest 12 se podrá retirar)
-- **Prisma 6.19.3** con **SQLite** (migrable a MySQL)
+- **Prisma 6.19.3** con **SQLite** en desarrollo y **MySQL** en producción y pruebas
 - **Zod 4** para validar variables de entorno y configuración JSON
 - **class-validator** para validar DTOs
 - **nestjs-pino 5** para logs estructurados
@@ -66,13 +66,15 @@ Toda la configuración vive en `.env` (ver `.env.example`). La aplicación **no 
 |---|---|---|
 | `NODE_ENV` | `development` \| `test` \| `production` | `development` |
 | `HOST` / `PORT` | Dirección y puerto del servidor | `0.0.0.0` / `3000` |
-| `DATABASE_URL` | URL de SQLite o MySQL | `file:C:/Users/.../Cuentas/data/cuentas.db` |
+| `DATABASE_URL` | URL de MySQL (o SQLite para dev local) | `mysql://usuario:clave@host:3306/cuentas` |
 | `CORS_ORIGINS` | Orígenes permitidos, separados por coma | `http://localhost:5173` |
 | `LOG_LEVEL` | Nivel de logs de pino | `debug` |
 | `DOCS_ENABLED` | Habilita Swagger en `/api/docs` | `true` |
 | `THROTTLE_TTL_MS` / `THROTTLE_LIMIT` | Límite global de peticiones por IP | `60000` / `100` |
 
-> **Importante:** la base SQLite debe estar **fuera de OneDrive**. OneDrive sincroniza los archivos `-wal` y `-shm` mientras la aplicación escribe y puede corromper la base.
+> **Pruebas:** Jest y Playwright usan una base MySQL independiente llamada `Cuentas_Test`; la URL se deriva de `DATABASE_URL` (en `.env`) cambiando solo el nombre de la base. La base se resetea al inicio de cada corrida: no ejecutes Jest y E2E al mismo tiempo.
+
+> **Importante:** si usas SQLite en desarrollo, la base debe estar **fuera de OneDrive**. OneDrive sincroniza los archivos `-wal` y `-shm` mientras la aplicación escribe y puede corromper la base.
 
 ## Comandos
 
@@ -81,7 +83,7 @@ Toda la configuración vive en `.env` (ver `.env.example`). La aplicación **no 
 | `npm.cmd run start:dev` | Servidor en modo desarrollo (watch) |
 | `npm.cmd run build` | Compila a `dist/` |
 | `npm.cmd run start:prod` | Ejecuta la compilación |
-| `npm.cmd run test` | Pruebas unitarias y de integración |
+| `npm.cmd run test` | Pruebas unitarias y de integración (MySQL `Cuentas_Test`) |
 | `npm.cmd run test:cov` | Pruebas con cobertura |
 | `npm.cmd run lint` | ESLint |
 | `npm.cmd run format` | Prettier |
@@ -95,7 +97,6 @@ Toda la configuración vive en `.env` (ver `.env.example`). La aplicación **no 
 | `npm.cmd run mysql:generate` | Genera el cliente Prisma para MySQL |
 | `npm.cmd run mysql:apply` | Aplica `init.sql` a la base con `DATABASE_URL` |
 | `npm.cmd run mysql:diff` | SQL de diferencias entre la base MySQL y el esquema |
-| `npm.cmd run test:mysql -- mysql://...` | Corre toda la suite contra MySQL |
 
 ## Despliegue
 

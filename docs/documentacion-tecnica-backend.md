@@ -202,7 +202,7 @@ sequenceDiagram
 ## 3.2 Base de datos
 
 - **Desarrollo:** SQLite fuera de OneDrive (`%LOCALAPPDATA%\Cuentas\data\cuentas.db`) con `journal_mode=WAL` y `busy_timeout=5000`.
-- **Pruebas:** una base por worker de Jest (`cuentas.test.N.db` en SQLite; `cuentas_test_N` en MySQL).
+- **Pruebas:** una sola base MySQL, `Cuentas_Test`, compartida por los workers de Jest (cada suite crea sus propios usuarios). La URL se deriva de `DATABASE_URL` cambiando el nombre de la base; `TEST_DATABASE_URL` permite sobreescribirla.
 - **Portabilidad MySQL:** tipos tolerantes (String para enums/fechas/JSON, Int de 32 bits), sin SQL nativo; script `npm run mysql:schema`.
 
 ## 3.3 Variables de entorno
@@ -228,7 +228,8 @@ sequenceDiagram
 | `REFRESH_THROTTLE_TTL_MS` / `REFRESH_THROTTLE_LIMIT` | `60000` / `60` | Límite propio de `POST /auth/refresh` y `POST /auth/logout` |
 | `REFRESH_ROTATION_GRACE_MS` | `30000` | Gracia para tratar un refresh rotado reutilizado como carrera benigna |
 | `WEB_APP_URL` | `http://localhost:5173` | Enlaces de correo |
-| `TEST_MYSQL_URL` | — | Solo pruebas: corre la suite contra MySQL |
+| `TEST_DATABASE_URL` | — | Solo pruebas: reemplaza host/credenciales de la URL derivada (la base siempre es `Cuentas_Test`) |
+| `TEST_DB_CONNECTION_LIMIT` | `5` | Solo pruebas: conexiones por proceso |
 | `BACKUP_DIR` / `BACKUP_RETENTION` | carpeta de la BD / 14 | Respaldo SQLite |
 
 ---
@@ -249,7 +250,7 @@ cuentas-api/
 │  ├─ backup.mjs                    Respaldo SQLite (VACUUM INTO + rotación)
 │  ├─ mysql-schema.mjs              Genera prisma/schema.mysql.prisma
 │  ├─ openapi-3.1.mjs               Convierte la spec servida a OpenAPI 3.1
-│  └─ test-mysql.mjs                Corre la suite contra MySQL
+│  └─ e2e-server.mjs                Prepara la base Cuentas_Test y levanta la API para E2E
 ├─ src/
 │  ├─ main.ts                       Bootstrap (Fastify + pino)
 │  ├─ app.module.ts                 Módulos, guards globales e interceptor
