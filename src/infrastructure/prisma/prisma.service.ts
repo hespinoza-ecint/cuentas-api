@@ -18,6 +18,10 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     super({
       datasourceUrl: appConfig.databaseUrl,
       log: appConfig.isTest ? [] : ['warn', 'error'],
+      // Las transacciones interactivas encadenan varias consultas (pagos,
+      // purgas, resets). Con un MySQL remoto el default de 5 s se queda corto;
+      // maxWait evita fallar mientras se espera una conexion del pool.
+      transactionOptions: { maxWait: 10_000, timeout: 30_000 },
     });
     this.isSqlite = appConfig.databaseUrl.startsWith('file:');
   }

@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
+import { deleteUserData } from '../users/user-data-purge';
 
 export interface MaintenanceReport {
   ranAt: string;
@@ -67,6 +68,10 @@ export class MaintenanceService {
     for (const user of pendingUsers) {
       try {
         await this.prisma.$transaction(async (tx) => {
+          // MySQL no resuelve la cascada de User con las FK Restrict cruzadas
+          // (CardPayment -> CashMovement): hay que borrar en orden explicito.
+          await deleteUserData(tx, user.id);
+
           await tx.auditLog.create({
             data: {
               action: 'user.purged',
